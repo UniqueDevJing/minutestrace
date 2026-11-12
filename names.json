@@ -1,0 +1,10 @@
+{
+  "name": "MinutesTrace",
+  "queries": [
+    {
+      "query": "\"MinutesTrace\" meeting AI",
+      "result": "No matching meeting product found in the first returned search results on 2026-11-12."
+    }
+  ],
+  "searched": true
+}

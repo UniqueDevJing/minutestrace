@@ -1,0 +1,22 @@
+[Unit]
+Description=MinutesTrace persistent job worker
+After=network.target mysql.service minutestrace-api.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/minutestrace/backend
+EnvironmentFile=/opt/minutestrace/minutestrace.env
+Environment=PYTHONPATH=/opt/minutestrace/backend
+ExecStart=/opt/minutestrace/venv/bin/python -m app.worker
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/minutestrace/data
+
+[Install]
+WantedBy=multi-user.target

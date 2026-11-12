@@ -1,0 +1,51 @@
+{
+ "start": "2026-11-12T09:22:35.050Z",
+ "round": 0,
+ "idle": 0,
+ "errors": 1,
+ "status": "error",
+ "history": [
+  {
+   "at": "2026-11-12T10:01:41.524Z",
+   "mode": "manual",
+   "status": "error",
+   "fails": 0,
+   "round": 0,
+   "reused": false,
+   "stopHookActive": false
+  }
+ ],
+ "max": 3,
+ "marker": {
+  "page": null,
+  "url": "http://127.0.0.1:5173/minutestrace/",
+  "root": null,
+  "kind": "software",
+  "category": "AI meeting minutes workspace",
+  "primary": "创建会议",
+  "rounds": 3,
+  "start": "2026-11-12T09:22:35.050Z",
+  "by": "gate.mjs --start"
+ },
+ "manual": true,
+ "fp": "22245c15f376436e",
+ "page": "http://127.0.0.1:5173/minutestrace/",
+ "found": {
+  "fails": [],
+  "warns": [],
+  "crashed": [
+   "the copy (the page showed no <main>, <section> or <h1> to lint)",
+   "consistency.mjs gave no report (exit 1: Error: Chrome exited early (4294930433))",
+   "check.mjs could not run (exit 2: check: Chrome did not start)"
+  ],
+  "seconds": {
+   "consistency": 0,
+   "layout": 16
+  }
+ },
+ "open": [],
+ "waived": [],
+ "warnCount": 0,
+ "note": "the copy (the page showed no <main>, <section> or <h1> to lint); consistency.mjs gave no report (exit 1: Error: Chrome exited early (4294930433)); check.mjs could not run (exit 2: check: Chrome did not start)",
+ "at": "2026-11-12T10:01:41.525Z"
+}

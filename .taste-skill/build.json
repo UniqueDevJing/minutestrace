@@ -1,0 +1,11 @@
+{
+ "page": null,
+ "url": "http://127.0.0.1:5173/minutestrace/",
+ "root": null,
+ "kind": "software",
+ "category": "AI meeting minutes workspace",
+ "primary": "创建会议",
+ "rounds": 3,
+ "start": "2026-11-12T09:22:35.050Z",
+ "by": "gate.mjs --start"
+}

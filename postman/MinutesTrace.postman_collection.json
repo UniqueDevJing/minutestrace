@@ -1,0 +1,48 @@
+{
+  "info": {
+    "name": "MinutesTrace API",
+    "description": "Contract smoke checks for authentication, dashboard and meeting lifecycle.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://127.0.0.1:8000" },
+    { "key": "username", "value": "demo" },
+    { "key": "password", "value": "demo123456" },
+    { "key": "token", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "request": { "method": "GET", "url": "{{baseUrl}}/health" },
+      "event": [{ "listen": "test", "script": { "exec": ["pm.test('service is healthy', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().status).to.eql('ok'); });"] } }]
+    },
+    {
+      "name": "Login",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\"username\":\"{{username}}\",\"password\":\"{{password}}\"}" },
+        "url": "{{baseUrl}}/auth/login"
+      },
+      "event": [{ "listen": "test", "script": { "exec": ["pm.test('login succeeds', () => pm.response.to.have.status(200));", "pm.collectionVariables.set('token', pm.response.json().token);"] } }]
+    },
+    {
+      "name": "Dashboard",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": "{{baseUrl}}/dashboard"
+      },
+      "event": [{ "listen": "test", "script": { "exec": ["pm.test('dashboard contract', () => { pm.response.to.have.status(200); const body = pm.response.json(); pm.expect(body).to.have.property('stats'); pm.expect(body.meetings).to.be.an('array'); });"] } }]
+    },
+    {
+      "name": "Meetings",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": "{{baseUrl}}/meetings"
+      },
+      "event": [{ "listen": "test", "script": { "exec": ["pm.test('meeting list contract', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().items).to.be.an('array'); });"] } }]
+    }
+  ]
+}

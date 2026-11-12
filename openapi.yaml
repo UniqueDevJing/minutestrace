@@ -1,0 +1,387 @@
+openapi: 3.1.0
+info:
+  title: MinutesTrace API
+  version: 1.0.0
+  description: Evidence-linked meeting transcription, minutes generation, Agent review and human approval.
+servers:
+  - url: /minutestrace/api
+security:
+  - bearerAuth: []
+paths:
+  /health:
+    get:
+      security: []
+      summary: Check service and database health
+      responses:
+        '200':
+          description: Healthy service
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /auth/login:
+    post:
+      security: []
+      summary: Exchange credentials for a bearer token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Authenticated session
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /auth/me:
+    get:
+      summary: Return the current user
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /dashboard:
+    get:
+      summary: Return meetings, pending reviews and action metrics
+      responses:
+        '200':
+          description: Dashboard data
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+  /meetings:
+    get:
+      summary: List meetings visible to the current user
+      responses:
+        '200':
+          description: Meeting list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Meeting' }
+    post:
+      summary: Create a meeting
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MeetingCreate' }
+      responses:
+        '201':
+          description: Created meeting
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Meeting' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /meetings/{meeting_id}:
+    parameters:
+      - $ref: '#/components/parameters/MeetingId'
+    get:
+      summary: Return one meeting with materials and current processing state
+      responses:
+        '200':
+          description: Meeting detail
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      summary: Update meeting metadata or lifecycle state
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200':
+          description: Updated meeting
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Meeting' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /meetings/{meeting_id}/assets:
+    parameters:
+      - $ref: '#/components/parameters/MeetingId'
+    post:
+      summary: Upload a meeting material
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '201':
+          description: Stored or deduplicated asset
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '413':
+          description: File exceeds the configured upload limit
+  /meetings/{meeting_id}/transcription:
+    parameters:
+      - $ref: '#/components/parameters/MeetingId'
+    post:
+      summary: Queue an idempotent transcription job
+      responses:
+        '202':
+          description: Queued job
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /meetings/{meeting_id}/transcript:
+    parameters:
+      - $ref: '#/components/parameters/MeetingId'
+    get:
+      summary: Return ordered transcript segments
+      responses:
+        '200':
+          description: Transcript segments
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TranscriptSegment' }
+  /transcript-segments/{segment_id}:
+    patch:
+      summary: Correct transcript text or confirmed speaker
+      parameters:
+        - in: path
+          name: segment_id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200':
+          description: Updated segment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TranscriptSegment' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /meetings/{meeting_id}/speaker-suggestions:
+    post:
+      summary: Suggest participant mappings without persisting them
+      parameters:
+        - $ref: '#/components/parameters/MeetingId'
+      responses:
+        '200':
+          description: Filtered suggestions
+          content:
+            application/json:
+              schema: { type: array, items: { type: object, additionalProperties: true } }
+  /meetings/{meeting_id}/minutes/generate:
+    post:
+      summary: Queue structured minutes generation
+      parameters:
+        - $ref: '#/components/parameters/MeetingId'
+      responses:
+        '202':
+          description: Queued generation job
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+  /meetings/{meeting_id}/minutes:
+    get:
+      summary: Return current minutes, evidence and version history
+      parameters:
+        - $ref: '#/components/parameters/MeetingId'
+      responses:
+        '200':
+          description: Current structured minutes
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /meetings/{meeting_id}/review-runs:
+    post:
+      summary: Queue a review-revise Agent run
+      parameters:
+        - $ref: '#/components/parameters/MeetingId'
+      responses:
+        '202':
+          description: Created Agent run
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentRun' }
+  /review-runs/{run_id}:
+    get:
+      summary: Return Agent run and steps
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Run detail
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /review-runs/{run_id}/events:
+    get:
+      summary: Stream persisted run events; supports Last-Event-ID
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Server-sent event stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+  /review-runs/{run_id}/{action}:
+    post:
+      summary: Cancel, resume, apply or discard a run
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - in: path
+          name: action
+          required: true
+          schema: { type: string, enum: [cancel, resume, apply, discard] }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, maxLength: 500 }
+      responses:
+        '200':
+          description: Updated run
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentRun' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /meetings/{meeting_id}/export:
+    get:
+      summary: Export approved minutes
+      parameters:
+        - $ref: '#/components/parameters/MeetingId'
+        - in: query
+          name: format
+          schema: { type: string, enum: [docx, pdf], default: docx }
+      responses:
+        '200':
+          description: Exported document
+          content:
+            application/vnd.openxmlformats-officedocument.wordprocessingml.document: {}
+            application/pdf: {}
+  /admin/observability:
+    get:
+      summary: Return AI calls, latency, token and failure aggregates
+      responses:
+        '200':
+          description: Observability data
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '403': { $ref: '#/components/responses/Forbidden' }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    MeetingId:
+      in: path
+      name: meeting_id
+      required: true
+      schema: { type: integer }
+    RunId:
+      in: path
+      name: run_id
+      required: true
+      schema: { type: integer }
+  responses:
+    Unauthorized: { description: Missing or invalid bearer token }
+    Forbidden: { description: Authenticated user lacks the required role }
+    NotFound: { description: Resource does not exist or is not visible to this user }
+    Conflict: { description: Resource state does not permit the requested transition }
+    ValidationError: { description: Request failed schema or business validation }
+  schemas:
+    Health:
+      type: object
+      required: [status, database, worker]
+      properties:
+        status: { type: string, const: ok }
+        database: { type: string }
+        worker: { type: string }
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string, minLength: 3, maxLength: 50 }
+        password: { type: string, minLength: 8, maxLength: 128 }
+    AuthResponse:
+      type: object
+      required: [token, user]
+      properties:
+        token: { type: string }
+        user: { $ref: '#/components/schemas/User' }
+    User:
+      type: object
+      required: [id, username, displayName, role]
+      properties:
+        id: { type: integer }
+        username: { type: string }
+        displayName: { type: string }
+        role: { type: string, enum: [employee, admin] }
+    MeetingCreate:
+      type: object
+      required: [title, startsAt]
+      properties:
+        title: { type: string, minLength: 2, maxLength: 120 }
+        startsAt: { type: string, format: date-time }
+        participants: { type: array, items: { type: string }, maxItems: 50 }
+        agenda: { type: string, maxLength: 4000 }
+    Meeting:
+      type: object
+      required: [id, title, status, ownerId, startsAt]
+      properties:
+        id: { type: integer }
+        title: { type: string }
+        status: { type: string, enum: [draft, in_progress, ended, archived, cancelled] }
+        ownerId: { type: integer }
+        startsAt: { type: string, format: date-time }
+        participants: { type: array, items: { type: string } }
+    Job:
+      type: object
+      required: [id, kind, status, progress]
+      properties:
+        id: { type: integer }
+        kind: { type: string }
+        status: { type: string, enum: [queued, running, succeeded, failed, cancelled] }
+        progress: { type: integer, minimum: 0, maximum: 100 }
+    TranscriptSegment:
+      type: object
+      required: [id, startMs, endMs, speakerLabel, text]
+      properties:
+        id: { type: integer }
+        startMs: { type: integer, minimum: 0 }
+        endMs: { type: integer, minimum: 0 }
+        speakerLabel: { type: string }
+        speakerName: { type: [string, 'null'] }
+        text: { type: string }
+    AgentRun:
+      type: object
+      required: [id, meeting_id, status, currentRound, maxRounds]
+      properties:
+        id: { type: integer }
+        meeting_id: { type: integer }
+        status: { type: string, enum: [queued, running, waiting_human, applied, discarded, cancelled, failed] }
+        currentRound: { type: integer }
+        maxRounds: { type: integer }
+        score: { type: number }
+        revisedMinutes: { type: [object, 'null'], additionalProperties: true }
