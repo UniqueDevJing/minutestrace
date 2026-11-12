@@ -3,11 +3,12 @@ import time
 from typing import Any
 
 import httpx
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .models import AiCallLog
-from .schemas import MinutesContent
+from .schemas import MinutesContent, SpeakerSuggestions
 
 
 class QwenClient:
@@ -25,7 +26,7 @@ class QwenClient:
         purpose: str,
         system: str,
         user: str,
-        response_schema: type[MinutesContent] | None = None,
+        response_schema: type[BaseModel] | None = None,
     ) -> dict[str, Any] | None:
         if not self.enabled:
             return None
@@ -111,6 +112,15 @@ class QwenClient:
             json.dumps({"minutes": minutes, "transcript": transcript}, ensure_ascii=False),
         )
         return (result or {}).get("issues", []) if isinstance(result, dict) else []
+
+    def suggest_speakers(self, participants: list[str], transcript: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        result = self.json_call(
+            "speaker_matching",
+            "根据参会人名单和转写片段，建议 speaker_label 对应的人。只能从参会人名单中选择，无法判断时使用待确认。只输出 JSON。",
+            json.dumps({"participants": participants, "transcript": transcript[:120]}, ensure_ascii=False),
+            response_schema=SpeakerSuggestions,
+        )
+        return (result or {}).get("suggestions", []) if isinstance(result, dict) else []
 
     def revise_minutes(self, minutes: dict[str, Any], issues: list[dict[str, Any]], transcript: list[dict[str, Any]]) -> dict[str, Any] | None:
         return self.json_call(

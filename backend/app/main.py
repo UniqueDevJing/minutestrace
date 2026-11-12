@@ -13,17 +13,18 @@ from typing import Any
 from urllib.parse import quote
 
 from docx import Document
-from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile, status
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfgen import canvas
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from .config import get_settings
+from .ai import QwenClient
 from .database import SessionLocal, get_db, init_db
 from .models import (
     ActionItem,
@@ -135,6 +136,8 @@ def job_dict(job: Job) -> dict[str, Any]:
         "kind": job.kind,
         "status": job.status,
         "progress": job.progress,
+        "attempt": job.attempt,
+        "max_attempts": settings.job_max_attempts,
         "error": job.error,
         "result": json_loads(job.result_json, {}),
         "updated_at": iso(job.updated_at),
@@ -357,6 +360,8 @@ def queue_transcription(meeting_id: int, asset_id: int | None = None, db: Sessio
     if not asset or asset.meeting_id != meeting_id:
         raise HTTPException(status_code=422, detail="请先上传会议录音或文本")
     job = create_job(db, "transcription", meeting_id, f"transcription:{asset.id}:{asset.sha256}", asset_id=asset.id)
+    if job.status == "failed":
+        raise HTTPException(status_code=409, detail="转写已达到最大重试次数，请更换资料后重试")
     return job_dict(job)
 
 
@@ -380,11 +385,38 @@ def update_segment(segment_id: int, payload: SegmentUpdate, db: Session = Depend
 
 
 @app.post("/meetings/{meeting_id}/speaker-suggestions")
-def speaker_suggestions(meeting_id: int, db: Session = Depends(get_db), _: User = Depends(current_user)) -> dict[str, Any]:
+def speaker_suggestions(
+    meeting_id: int,
+    use_ai: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    _: User = Depends(current_user),
+) -> dict[str, Any]:
     meeting = ensure_meeting(db, meeting_id)
     participants = json_loads(meeting.participants_json, [])
-    labels = list(db.scalars(select(TranscriptSegment.speaker_label).where(TranscriptSegment.meeting_id == meeting_id).distinct()))
-    return {"items": [{"speaker_label": label, "suggested_name": participants[index] if index < len(participants) else "待确认", "confidence": 0.72 if index < len(participants) else 0.0} for index, label in enumerate(labels)]}
+    segments = list(db.scalars(select(TranscriptSegment).where(TranscriptSegment.meeting_id == meeting_id).order_by(TranscriptSegment.ordinal)))
+    labels = list(dict.fromkeys(segment.speaker_label for segment in segments))
+    suggestions = []
+    if use_ai and segments:
+        transcript = [
+            {"id": item.id, "speaker": item.speaker_name or item.speaker_label, "text": item.text}
+            for item in segments[:120]
+        ]
+        suggestions = QwenClient(db, meeting_id).suggest_speakers(participants, transcript)
+    by_label = {item.get("speaker_label"): item for item in suggestions if isinstance(item, dict)}
+    items = []
+    for index, label in enumerate(labels):
+        item = by_label.get(label, {})
+        suggested_name = item.get("suggested_name") if item.get("suggested_name") in participants else (participants[index] if index < len(participants) else "待确认")
+        items.append(
+            {
+                "speaker_label": label,
+                "suggested_name": suggested_name,
+                "confidence": float(item.get("confidence") or (0.72 if index < len(participants) else 0.0)),
+                "reason": str(item.get("reason") or ("按参会人顺序生成的初始建议" if not use_ai else "模型未提供可用建议")),
+                "source": "ai" if item else "fallback",
+            }
+        )
+    return {"items": items}
 
 
 @app.post("/meetings/{meeting_id}/minutes/generate", status_code=202)
@@ -395,6 +427,8 @@ def queue_minutes(meeting_id: int, db: Session = Depends(get_db), _: User = Depe
         raise HTTPException(status_code=422, detail="请先完成会议转写")
     source_digest = hashlib.sha256("\n".join(item.text for item in segments).encode()).hexdigest()
     job = create_job(db, "minutes_generation", meeting_id, f"minutes:{meeting_id}:{source_digest}")
+    if job.status == "failed":
+        raise HTTPException(status_code=409, detail="纪要生成已达到最大重试次数，请修改转写后重试")
     return job_dict(job)
 
 
@@ -428,7 +462,12 @@ def get_review(run_id: int, db: Session = Depends(get_db), _: User = Depends(cur
 
 
 @app.get("/review-runs/{run_id}/events")
-def review_events(request: Request, run_id: int, token: str = Query(default="")) -> StreamingResponse:
+def review_events(
+    request: Request,
+    run_id: int,
+    token: str = Query(default=""),
+    last_event_id: int | None = Header(default=None, alias="Last-Event-ID"),
+) -> StreamingResponse:
     # EventSource cannot set Authorization headers, so validate a short-lived bearer token from the query.
     from .security import bearer as _unused  # noqa: F401
     import jwt
@@ -452,7 +491,7 @@ def review_events(request: Request, run_id: int, token: str = Query(default=""))
                 data = run_dict(db, run)
                 signature = f"{run.updated_at}:{len(data['steps'])}:{run.status}"
                 if signature != last_signature:
-                    yield f"event: run\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
+                    yield f"id: {len(data['steps'])}\nevent: run\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
                     last_signature = signature
                 if run.status in {"waiting_human", "approved", "rejected", "cancelled", "failed"}:
                     break
@@ -468,16 +507,53 @@ def decide_review(run_id: int, action: str, payload: RunDecision, db: Session = 
     if action == "cancel":
         if run.status not in {"queued", "running"}:
             raise HTTPException(status_code=409, detail="当前状态不能取消")
-        run.cancel_requested = True
-        run.decision_reason = payload.reason
+        next_status = "cancelled" if run.status == "queued" else "running"
+        claimed = db.execute(
+            update(AgentRun)
+            .where(AgentRun.id == run_id, AgentRun.status.in_(["queued", "running"]), AgentRun.version == run.version)
+            .values(status=next_status, cancel_requested=True, decision_reason=payload.reason, version=run.version + 1)
+        )
+        if claimed.rowcount != 1:
+            raise HTTPException(status_code=409, detail="审校状态已被其他操作更新")
+        if next_status == "cancelled":
+            db.execute(update(Job).where(Job.run_id == run_id, Job.status == "queued").values(status="cancelled"))
+        db.refresh(run)
+    elif action == "resume":
+        if run.status not in {"cancelled", "failed"}:
+            raise HTTPException(status_code=409, detail="当前状态不能恢复")
+        if run.current_round >= run.max_rounds:
+            raise HTTPException(status_code=409, detail="审校轮次已用完，请重新发起审校")
+        claimed = db.execute(
+            update(AgentRun)
+            .where(AgentRun.id == run_id, AgentRun.status.in_(["cancelled", "failed"]), AgentRun.version == run.version)
+            .values(status="queued", cancel_requested=False, decision_reason=payload.reason, version=run.version + 1)
+        )
+        if claimed.rowcount != 1:
+            raise HTTPException(status_code=409, detail="审校状态已被其他操作更新")
+        db.refresh(run)
+        create_job(db, "agent_review", run.meeting_id, f"review:resume:{run.id}:{run.version}", run_id=run.id)
     elif action == "reject":
         if run.status != "waiting_human":
             raise HTTPException(status_code=409, detail="审校尚未进入人工确认")
-        run.status = "rejected"
-        run.decision_reason = payload.reason
+        claimed = db.execute(
+            update(AgentRun)
+            .where(AgentRun.id == run_id, AgentRun.status == "waiting_human", AgentRun.version == run.version)
+            .values(status="rejected", decision_reason=payload.reason, version=run.version + 1)
+        )
+        if claimed.rowcount != 1:
+            raise HTTPException(status_code=409, detail="审校状态已被其他操作更新")
+        db.refresh(run)
     elif action == "approve":
         if run.status != "waiting_human":
             raise HTTPException(status_code=409, detail="审校尚未进入人工确认")
+        claimed = db.execute(
+            update(AgentRun)
+            .where(AgentRun.id == run_id, AgentRun.status == "waiting_human", AgentRun.version == run.version)
+            .values(status="approved", decision_reason=payload.reason, version=run.version + 1)
+        )
+        if claimed.rowcount != 1:
+            raise HTTPException(status_code=409, detail="审校状态已被其他操作更新")
+        db.refresh(run)
         source = db.get(MinutesVersion, run.minutes_version_id)
         content = json_loads(run.revised_json, {}) or json_loads(source.content_json, {})
         next_version = (db.scalar(select(func.max(MinutesVersion.version)).where(MinutesVersion.meeting_id == run.meeting_id)) or 0) + 1
@@ -500,11 +576,8 @@ def decide_review(run_id: int, action: str, payload: RunDecision, db: Session = 
                 due_text=str(item.get("due") or "待确认")[:80],
                 evidence_json=json_dumps(item.get("evidence_segment_ids") or []),
             ))
-        run.status = "approved"
-        run.decision_reason = payload.reason
     else:
         raise HTTPException(status_code=404, detail="未知操作")
-    run.version += 1
     db.commit()
     return run_dict(db, run)
 

@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     asr_model: str = "paraformer-v2"
     demo_password: str = "demo123456"
     worker_stale_seconds: int = 180
+    job_max_attempts: int = 3
+    asr_segment_minutes: int = 20
     ffmpeg_path: str = "ffmpeg"
     environment: str = "development"
 

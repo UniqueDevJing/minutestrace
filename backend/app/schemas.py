@@ -79,3 +79,14 @@ class MinutesContent(BaseModel):
     action_items: list[ActionItemContent]
     open_questions: list[EvidenceItem]
     risks: list[EvidenceItem]
+
+
+class SpeakerSuggestion(BaseModel):
+    speaker_label: str = Field(min_length=1, max_length=40)
+    suggested_name: str = Field(min_length=1, max_length=80)
+    confidence: float = Field(ge=0, le=1)
+    reason: str = Field(default="", max_length=500)
+
+
+class SpeakerSuggestions(BaseModel):
+    suggestions: list[SpeakerSuggestion]

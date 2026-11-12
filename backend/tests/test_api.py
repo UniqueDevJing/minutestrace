@@ -41,6 +41,9 @@ def test_end_to_end_text_meeting(client: TestClient, auth: dict[str, str]):
     transcript = client.get(f"/meetings/{meeting_id}/transcript", headers=auth).json()
     assert transcript["total"] == 2
     assert transcript["items"][0]["speaker_name"] == "林澄"
+    suggestions = client.post(f"/meetings/{meeting_id}/speaker-suggestions", headers=auth).json()
+    assert suggestions["items"][0]["source"] == "fallback"
+    assert suggestions["items"][0]["suggested_name"] in {"林澄", "周岚"}
 
     queued = client.post(f"/meetings/{meeting_id}/minutes/generate", headers=auth)
     assert queued.status_code == 202
@@ -71,6 +74,28 @@ def test_end_to_end_text_meeting(client: TestClient, auth: dict[str, str]):
     pdf = client.get(f"/meetings/{meeting_id}/export?format=pdf", headers=auth)
     assert docx.status_code == 200 and docx.content.startswith(b"PK")
     assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF")
+
+
+def test_review_can_resume_before_worker_runs(client: TestClient, auth: dict[str, str]):
+    created = client.post(
+        "/meetings",
+        headers=auth,
+        json={"title": "恢复测试", "starts_at": datetime.now(timezone.utc).isoformat(), "participants": []},
+    )
+    meeting_id = created.json()["id"]
+    upload = client.post(
+        f"/meetings/{meeting_id}/assets",
+        headers=auth,
+        files={"file": ("meeting.txt", "[00:01] 林澄：确认恢复流程。", "text/plain")},
+    )
+    process(client.post(f"/meetings/{meeting_id}/transcription", headers=auth).json()["id"])
+    process(client.post(f"/meetings/{meeting_id}/minutes/generate", headers=auth).json()["id"])
+    run = client.post(f"/meetings/{meeting_id}/review-runs", headers=auth).json()
+    cancelled = client.post(f"/review-runs/{run['id']}/cancel", headers=auth, json={"reason": "测试取消"})
+    assert cancelled.status_code == 200
+    resumed = client.post(f"/review-runs/{run['id']}/resume", headers=auth, json={"reason": "测试恢复"})
+    assert resumed.status_code == 200
+    assert resumed.json()["status"] == "queued"
 
 
 def test_admin_boundary(client: TestClient, auth: dict[str, str]):
