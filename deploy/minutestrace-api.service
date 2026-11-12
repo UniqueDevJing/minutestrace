@@ -6,9 +6,9 @@ After=network.target mysql.service
 Type=simple
 User=www-data
 Group=www-data
-WorkingDirectory=/opt/minutestrace/backend
+WorkingDirectory=/opt/minutestrace/current/backend
 EnvironmentFile=/opt/minutestrace/minutestrace.env
-Environment=PYTHONPATH=/opt/minutestrace/backend
+Environment=PYTHONPATH=/opt/minutestrace/current/backend
 ExecStart=/opt/minutestrace/venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 18119 --workers 1 --proxy-headers
 Restart=on-failure
 RestartSec=3
