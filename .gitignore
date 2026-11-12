@@ -15,4 +15,6 @@ frontend/test-results/
 .taste-skill/shots/
 .taste-skill/runtime/
 output/playwright/
+.playwright-cli/
+data/
 *.log

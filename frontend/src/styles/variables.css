@@ -1,0 +1,51 @@
+:root {
+  --bg: #08151c;
+  --bg-deep: #061016;
+  --surface: rgba(18, 38, 47, .72);
+  --surface-solid: #102833;
+  --paper: rgba(232, 246, 246, .92);
+  --paper-strong: #f6fbfa;
+  --ink: #102229;
+  --ink-on-dark: #eef9f7;
+  --muted: #8ca9af;
+  --muted-dark: #59717a;
+  --line: rgba(172, 224, 223, .17);
+  --line-strong: rgba(172, 224, 223, .34);
+  --teal: #65d9d2;
+  --teal-bright: #9af3e6;
+  --teal-deep: #116f78;
+  --teal-soft: rgba(101, 217, 210, .18);
+  --coral: #ff9271;
+  --yellow: #f4d477;
+  --red: #ff746c;
+  --glass: rgba(13, 32, 41, .66);
+  --glass-light: rgba(238, 250, 248, .68);
+  --shadow: 0 24px 80px rgba(0, 0, 0, .24);
+  --shadow-soft: 0 14px 42px rgba(0, 0, 0, .14);
+  --radius-sm: 10px;
+  --radius: 18px;
+  --radius-lg: 28px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 72px;
+  --content-max: 1440px;
+  --font-sans: 'Host Grotesk', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', monospace;
+  --ease-out: cubic-bezier(.22, 1, .36, 1);
+  --duration-fast: 160ms;
+  --duration: 260ms;
+  --duration-slow: 700ms;
+  font-family: var(--font-sans);
+  color: var(--ink-on-dark);
+  background: var(--bg);
+  font-synthesis: none;
+}
+
+@media (max-width: 760px) {
+  :root { --radius: 14px; --radius-lg: 22px; }
+}
