@@ -5,8 +5,9 @@ import { ArrowRight, LockKeyhole } from '@lucide/vue'
 import { api, session } from '../api'
 
 const router = useRouter()
-const username = ref('demo')
-const password = ref('demo123456')
+const isDev = import.meta.env.DEV
+const username = ref(isDev ? 'demo' : '')
+const password = ref(isDev ? 'demo123456' : '')
 const busy = ref(false)
 const error = ref('')
 
@@ -45,7 +46,7 @@ async function login() {
         <div class="field"><label for="username">账号</label><input id="username" v-model="username" autocomplete="username" required></div>
         <div class="field"><label for="password">密码</label><input id="password" v-model="password" type="password" autocomplete="current-password" required minlength="8"></div>
         <button class="button primary" :disabled="busy"><LockKeyhole :size="17"/>{{ busy ? '正在验证…' : '进入工作区' }}<ArrowRight :size="17"/></button>
-        <div class="demo-credentials"><span>demo / demo123456</span><span>数据为项目内置演示</span></div>
+        <div v-if="isDev" class="demo-credentials"><span>demo / demo123456</span><span>仅开发环境演示账号</span></div>
       </form>
     </section>
   </main>

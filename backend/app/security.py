@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from .config import get_settings
 from .database import get_db
 from .models import User
+from .models import AgentRun, Meeting
 
 
 bearer = HTTPBearer(auto_error=False)
@@ -53,3 +54,21 @@ def require_admin(user: User = Depends(current_user)) -> User:
     if user.role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="需要管理员权限")
     return user
+
+
+def authorize_meeting(db: Session, meeting_id: int, user: User) -> Meeting:
+    """Enforce object-level meeting access before any related resource is read or changed."""
+    meeting = db.get(Meeting, meeting_id)
+    if not meeting or (user.role != "admin" and meeting.owner_id != user.id):
+        # Return 404 for foreign resources so IDs cannot be enumerated.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="会议不存在")
+    return meeting
+
+
+def authorize_run(db: Session, run_id: int, user: User) -> AgentRun:
+    """Apply the same ownership boundary to review runs and their event stream."""
+    run = db.get(AgentRun, run_id)
+    if not run:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="审校运行不存在")
+    authorize_meeting(db, run.meeting_id, user)
+    return run

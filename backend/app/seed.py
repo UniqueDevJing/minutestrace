@@ -23,7 +23,9 @@ DEMO_TRANSCRIPT = [
 
 def seed(db: Session) -> None:
     settings = get_settings()
-    if not db.scalar(select(User.id).limit(1)):
+    production = settings.environment.lower() in {"production", "prod"}
+    # Production may seed non-sensitive model metadata, never demo identities or demo meeting data.
+    if not production and not db.scalar(select(User.id).limit(1)):
         db.add_all(
             [
                 User(username="demo", display_name="演示成员", password_hash=hash_password(settings.demo_password), role="employee"),
@@ -61,7 +63,7 @@ def seed(db: Session) -> None:
         if not db.scalar(select(PromptTemplate).where(PromptTemplate.purpose == purpose, PromptTemplate.version == 1)):
             db.add(PromptTemplate(purpose=purpose, version=1, name=name, template=template, created_by=admin.id if admin else None))
     db.commit()
-    if db.scalar(select(Meeting.id).limit(1)):
+    if production or not demo or not admin or db.scalar(select(Meeting.id).limit(1)):
         return
     meeting = Meeting(
         title="证据化纪要发布评审",

@@ -8,6 +8,7 @@ import Transcript from './views/Transcript.vue'
 import Minutes from './views/Minutes.vue'
 import Review from './views/Review.vue'
 import Admin from './views/Admin.vue'
+import ModuleCenter from './views/ModuleCenter.vue'
 
 const router = createRouter({
   history: createWebHistory('/minutestrace/'),
@@ -20,6 +21,16 @@ const router = createRouter({
     { path: '/meetings/:id/minutes', component: Minutes },
     { path: '/reviews/:id', component: Review },
     { path: '/admin', component: Admin },
+    { path: '/meeting-center/management', component: Meetings, meta: { module: 'management' } },
+    { path: '/meeting-center/materials', component: ModuleCenter, meta: { module: 'materials' } },
+    { path: '/meeting-center/transcription', component: ModuleCenter, meta: { module: 'transcription' } },
+    { path: '/meeting-center/minutes', component: ModuleCenter, meta: { module: 'minutes' } },
+    { path: '/assistant/review', component: ModuleCenter, meta: { module: 'review' } },
+    { path: '/assistant/observability', component: ModuleCenter, meta: { module: 'observability' } },
+    { path: '/system/models', component: ModuleCenter, meta: { module: 'models' } },
+    { path: '/system/prompts', component: ModuleCenter, meta: { module: 'prompts' } },
+    { path: '/organization/departments', component: ModuleCenter, meta: { module: 'departments' } },
+    { path: '/organization/employees', component: ModuleCenter, meta: { module: 'employees' } },
   ],
   scrollBehavior: () => ({ top: 0 }),
 })

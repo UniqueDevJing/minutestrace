@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     worker_stale_seconds: int = 180
     job_max_attempts: int = 3
     asr_segment_minutes: int = 20
+    ffmpeg_timeout_seconds: int = 120
     ffmpeg_path: str = "ffmpeg"
     environment: str = "development"
 
@@ -32,8 +33,21 @@ class Settings(BaseSettings):
         return self.upload_limit_mb * 1024 * 1024
 
 
+def validate_runtime_settings(settings: Settings) -> None:
+    """Fail closed for production instead of silently using demo credentials."""
+    if settings.environment.lower() not in {"production", "prod"}:
+        return
+    if len(settings.jwt_secret) < 32 or settings.jwt_secret.startswith(("dev-only", "replace-with")):
+        raise RuntimeError("生产环境必须配置随机且至少 32 字符的 MINUTESTRACE_JWT_SECRET")
+    if settings.database_url.startswith("sqlite:"):
+        raise RuntimeError("生产环境必须使用受支持的持久化数据库，不能使用 SQLite")
+    if settings.demo_password in {"", "demo123456"}:
+        raise RuntimeError("生产环境不能使用默认演示密码")
+
+
 @lru_cache
 def get_settings() -> Settings:
     settings = Settings()
+    validate_runtime_settings(settings)
     settings.storage_dir.mkdir(parents=True, exist_ok=True)
     return settings

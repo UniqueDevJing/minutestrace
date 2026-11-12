@@ -22,6 +22,7 @@ fi
 if [ ! -f "${APP_ROOT}/minutestrace.env" ]; then
   DB_PASSWORD="$(openssl rand -hex 24)"
   JWT_SECRET="$(openssl rand -hex 32)"
+  DEMO_PASSWORD="$(openssl rand -hex 24)"
   mysql --protocol=socket <<SQL
 CREATE DATABASE IF NOT EXISTS minutestrace CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER IF NOT EXISTS 'minutestrace'@'127.0.0.1' IDENTIFIED BY '${DB_PASSWORD}';
@@ -45,7 +46,7 @@ SQL
     printf '%s\n' 'MINUTESTRACE_LLM_MODEL=qwen-plus'
     printf '%s\n' 'MINUTESTRACE_ASR_BASE_URL=https://dashscope.aliyuncs.com/api/v1'
     printf '%s\n' 'MINUTESTRACE_ASR_MODEL=paraformer-v2'
-    printf '%s\n' 'MINUTESTRACE_DEMO_PASSWORD=demo123456'
+    printf 'MINUTESTRACE_DEMO_PASSWORD=%s\n' "${DEMO_PASSWORD}"
     printf '%s\n' 'MINUTESTRACE_UPLOAD_LIMIT_MB=512'
     printf '%s\n' 'MINUTESTRACE_WORKER_STALE_SECONDS=180'
   } > "${APP_ROOT}/minutestrace.env"

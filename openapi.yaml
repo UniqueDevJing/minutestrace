@@ -44,6 +44,12 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/User' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+  /auth/logout:
+    post:
+      security: []
+      summary: Clear the current session on the client
+      responses:
+        '200': { description: Session cleared }
   /dashboard:
     get:
       summary: Return meetings, pending reviews and action metrics
@@ -233,12 +239,33 @@ paths:
       summary: Stream persisted run events; supports Last-Event-ID
       parameters:
         - $ref: '#/components/parameters/RunId'
+        - in: query
+          name: ticket
+          required: true
+          schema: { type: string }
       responses:
         '200':
           description: Server-sent event stream
           content:
             text/event-stream:
               schema: { type: string }
+  /review-runs/{run_id}/events-ticket:
+    post:
+      summary: Issue a short-lived, run-bound SSE ticket
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Ticket for one SSE connection
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ticket, expires_in]
+                properties:
+                  ticket: { type: string }
+                  expires_in: { type: integer, const: 60 }
+        '404': { $ref: '#/components/responses/NotFound' }
   /review-runs/{run_id}/{action}:
     post:
       summary: Cancel, resume, approve or reject a run
@@ -277,6 +304,38 @@ paths:
           content:
             application/vnd.openxmlformats-officedocument.wordprocessingml.document: {}
             application/pdf: {}
+  /meeting-center/minutes:
+    get:
+      summary: List dense meeting-center rows visible to the current user
+      parameters:
+        - in: query
+          name: query
+          schema: { type: string, maxLength: 120 }
+        - in: query
+          name: status
+          schema: { type: string }
+      responses:
+        '200': { description: Meeting-center minutes rows }
+  /meeting-center/materials:
+    get:
+      summary: List visible meeting materials
+      responses:
+        '200': { description: Meeting materials }
+  /meeting-center/transcription:
+    get:
+      summary: List visible transcription jobs
+      responses:
+        '200': { description: Transcription jobs }
+  /assistant/runs:
+    get:
+      summary: List visible Agent review runs
+      responses:
+        '200': { description: Agent review runs }
+  /assistant/observability:
+    get:
+      summary: Return employee-scoped assistant observability
+      responses:
+        '200': { description: Scoped observability data }
   /admin/observability:
     get:
       summary: Return AI calls, latency, token and failure aggregates

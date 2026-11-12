@@ -2,14 +2,17 @@
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Check, X, StopCircle, ShieldCheck, Bot } from '@lucide/vue'
-import { api, session } from '../api'
+import { api } from '../api'
 const route=useRoute();const router=useRouter();const id=Number(route.params.id)
 const run=ref<any>(null);const error=ref('');const busy=ref('');let timer:number;let events: EventSource | null = null
 async function load(){try{run.value=await api(`/review-runs/${id}`)}catch(e:any){error.value=e.message}}
-function connect(){
+async function connect(){
   events?.close()
   if(!run.value||!['queued','running'].includes(run.value.status))return
-  events=new EventSource(`/minutestrace/api/review-runs/${id}/events?token=${encodeURIComponent(session.token)}`)
+  try {
+    const stream=await api<{ticket:string}>(`/review-runs/${id}/events-ticket`,{method:'POST'})
+    events=new EventSource(`/minutestrace/api/review-runs/${id}/events?ticket=${encodeURIComponent(stream.ticket)}`)
+  } catch(e:any) { error.value=e.message; return }
   events.addEventListener('run', event=>{
     try { run.value=JSON.parse((event as MessageEvent).data); if(!['queued','running'].includes(run.value.status))events?.close() } catch { /* keep the last valid run */ }
   })

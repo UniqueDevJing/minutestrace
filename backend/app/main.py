@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import mimetypes
+import secrets
 import time
 import asyncio
 from contextlib import asynccontextmanager
@@ -20,6 +21,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfgen import canvas
+import jwt
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
@@ -54,13 +56,24 @@ from .schemas import (
     RunDecision,
     SegmentUpdate,
 )
-from .security import current_user, hash_password, issue_token, require_admin, verify_password
+from .security import authorize_meeting, authorize_run, current_user, hash_password, issue_token, require_admin, verify_password
 from .seed import seed
 from .utils import iso, json_dumps, json_loads
 from .worker import create_job, sign_asset
 
 
 settings = get_settings()
+_used_review_tickets: set[str] = set()
+_ALLOWED_UPLOAD_TYPES = {
+    ".txt": "text/plain",
+    ".md": "text/markdown",
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".m4a": "audio/mp4",
+    ".mp4": "video/mp4",
+}
 
 
 @asynccontextmanager
@@ -76,6 +89,10 @@ app = FastAPI(
     version="1.0.0",
     description="Evidence-linked meeting intelligence with human-controlled Agent review.",
     lifespan=lifespan,
+    # Interactive API discovery is useful locally but must not be public in production.
+    docs_url=None if settings.environment.lower() in {"production", "prod"} else "/docs",
+    redoc_url=None if settings.environment.lower() in {"production", "prod"} else "/redoc",
+    openapi_url=None if settings.environment.lower() in {"production", "prod"} else "/openapi.json",
 )
 app.add_middleware(
     CORSMiddleware,
@@ -84,20 +101,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-def ensure_meeting(db: Session, meeting_id: int) -> Meeting:
-    meeting = db.get(Meeting, meeting_id)
-    if not meeting:
-        raise HTTPException(status_code=404, detail="会议不存在")
-    return meeting
-
-
-def ensure_run(db: Session, run_id: int) -> AgentRun:
-    run = db.get(AgentRun, run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="审校运行不存在")
-    return run
 
 
 def meeting_dict(db: Session, meeting: Meeting, *, detailed: bool = False) -> dict[str, Any]:
@@ -132,6 +135,11 @@ def meeting_dict(db: Session, meeting: Meeting, *, detailed: bool = False) -> di
         result["assets"] = [asset_dict(item) for item in db.scalars(select(MeetingAsset).where(MeetingAsset.meeting_id == meeting.id).order_by(MeetingAsset.created_at.desc()))]
         result["recent_jobs"] = [job_dict(item) for item in db.scalars(select(Job).where(Job.meeting_id == meeting.id).order_by(Job.created_at.desc()).limit(8))]
     return result
+
+
+def visible_meetings(statement, user: User):
+    """Apply the same owner/admin boundary to collection endpoints."""
+    return statement if user.role == "admin" else statement.where(Meeting.owner_id == user.id)
 
 
 def asset_dict(asset: MeetingAsset) -> dict[str, Any]:
@@ -242,12 +250,16 @@ def me(user: User = Depends(current_user)) -> dict[str, Any]:
 
 
 @app.get("/dashboard")
-def dashboard(db: Session = Depends(get_db), _: User = Depends(current_user)) -> dict[str, Any]:
-    all_meetings = list(db.scalars(select(Meeting).order_by(Meeting.starts_at.desc())))
+def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user)) -> dict[str, Any]:
+    all_meetings = list(db.scalars(visible_meetings(select(Meeting).order_by(Meeting.starts_at.desc()), user)))
     meetings = all_meetings[:6]
-    action_items = list(db.scalars(select(ActionItem).where(ActionItem.status == "open").order_by(ActionItem.created_at.desc()).limit(8)))
-    all_minutes = list(db.scalars(select(MinutesVersion)))
-    ai_calls = list(db.scalars(select(AiCallLog)))
+    action_query = select(ActionItem).join(Meeting, Meeting.id == ActionItem.meeting_id).where(ActionItem.status == "open").order_by(ActionItem.created_at.desc()).limit(8)
+    action_items = list(db.scalars(action_query if user.role == "admin" else action_query.where(Meeting.owner_id == user.id)))
+    minutes_query = select(MinutesVersion).join(Meeting, Meeting.id == MinutesVersion.meeting_id)
+    all_minutes = list(db.scalars(minutes_query if user.role == "admin" else minutes_query.where(Meeting.owner_id == user.id)))
+    calls_query = select(AiCallLog).join(Meeting, Meeting.id == AiCallLog.meeting_id, isouter=True)
+    all_ai_calls = list(db.scalars(calls_query if user.role == "admin" else calls_query.where(Meeting.owner_id == user.id)))
+    ai_calls = [item for item in all_ai_calls if item.meeting_id is not None]
     now = datetime.utcnow()
     trend = []
     for offset in range(6, -1, -1):
@@ -312,13 +324,118 @@ def dashboard(db: Session = Depends(get_db), _: User = Depends(current_user)) ->
 def list_meetings(
     query: str = Query(default="", max_length=120),
     db: Session = Depends(get_db),
-    _: User = Depends(current_user),
+    user: User = Depends(current_user),
 ) -> dict[str, Any]:
-    statement = select(Meeting).order_by(Meeting.starts_at.desc())
+    statement = visible_meetings(select(Meeting).order_by(Meeting.starts_at.desc()), user)
     if query.strip():
         statement = statement.where(Meeting.title.like(f"%{query.strip()}%"))
     items = list(db.scalars(statement.limit(100)))
     return {"items": [meeting_dict(db, item) for item in items], "total": len(items)}
+
+
+def meeting_center_rows(db: Session, meetings: list[Meeting]) -> list[dict[str, Any]]:
+    """Batch-load related rows so the meeting-center table does not issue N+1 queries."""
+    if not meetings:
+        return []
+    meeting_ids = [meeting.id for meeting in meetings]
+    assets_by: dict[int, list[MeetingAsset]] = {}
+    for asset in db.scalars(select(MeetingAsset).where(MeetingAsset.meeting_id.in_(meeting_ids)).order_by(MeetingAsset.created_at.desc())):
+        assets_by.setdefault(asset.meeting_id, []).append(asset)
+    jobs_by: dict[int, list[Job]] = {}
+    for job in db.scalars(select(Job).where(Job.meeting_id.in_(meeting_ids)).order_by(Job.created_at.desc())):
+        bucket = jobs_by.setdefault(job.meeting_id, [])
+        if len(bucket) < 8:
+            bucket.append(job)
+    latest_minutes_by: dict[int, MinutesVersion] = {}
+    for item in db.scalars(select(MinutesVersion).where(MinutesVersion.meeting_id.in_(meeting_ids)).order_by(MinutesVersion.version.desc())):
+        latest_minutes_by.setdefault(item.meeting_id, item)
+    latest_review_by: dict[int, AgentRun] = {}
+    for item in db.scalars(select(AgentRun).where(AgentRun.meeting_id.in_(meeting_ids)).order_by(AgentRun.created_at.desc())):
+        latest_review_by.setdefault(item.meeting_id, item)
+    owners = {user.id: user.display_name for user in db.scalars(select(User).where(User.id.in_({meeting.owner_id for meeting in meetings})))}
+    model = db.scalar(select(AiModelConfig).where(AiModelConfig.purpose == "minutes_generation"))
+    rows = []
+    for meeting in meetings:
+        assets = assets_by.get(meeting.id, [])
+        jobs = jobs_by.get(meeting.id, [])
+        latest_minutes = latest_minutes_by.get(meeting.id)
+        latest_review = latest_review_by.get(meeting.id)
+        minutes_job = next((job for job in jobs if job.kind == "minutes_generation"), None)
+        transcription_job = next((job for job in jobs if job.kind == "transcription"), None)
+        media = next((asset for asset in assets if asset.kind == "audio"), assets[0] if assets else None)
+        progress = latest_minutes and 100 or (minutes_job.progress if minutes_job else (transcription_job.progress if transcription_job else 0))
+        rows.append({
+            "meeting_id": meeting.id,
+            "title": meeting.title,
+            "audio_file": media.file_name if media else "—",
+            "asset_count": len(assets),
+            "status": latest_minutes.status if latest_minutes else (minutes_job.status if minutes_job else meeting.status),
+            "progress": progress,
+            "model": model.model if model and model.enabled else "未配置",
+            "creator": owners.get(meeting.owner_id, "未知"),
+            "created_at": iso(meeting.created_at),
+            "meeting_status": meeting.status,
+            "minutes_version": latest_minutes.version if latest_minutes else None,
+            "review_status": latest_review.status if latest_review else None,
+            "active_job": job_dict(minutes_job or transcription_job) if (minutes_job or transcription_job) else None,
+        })
+    return rows
+
+
+@app.get("/meeting-center/minutes")
+def meeting_center_minutes(
+    query: str = Query(default="", max_length=120),
+    status_filter: str = Query(default="", alias="status"),
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    meetings = list(db.scalars(visible_meetings(select(Meeting).order_by(Meeting.created_at.desc()).limit(200), user)))
+    rows = meeting_center_rows(db, meetings)
+    if query.strip():
+        rows = [row for row in rows if query.strip().lower() in row["title"].lower()]
+    if status_filter.strip():
+        rows = [row for row in rows if row["status"] == status_filter.strip()]
+    return {"items": rows, "total": len(rows)}
+
+
+@app.get("/meeting-center/materials")
+def meeting_center_materials(db: Session = Depends(get_db), user: User = Depends(current_user)) -> dict[str, Any]:
+    meetings = {meeting.id: meeting for meeting in db.scalars(visible_meetings(select(Meeting), user))}
+    owners = {user.id: user.display_name for user in db.scalars(select(User))}
+    items = []
+    asset_query = select(MeetingAsset).join(Meeting, Meeting.id == MeetingAsset.meeting_id).order_by(MeetingAsset.created_at.desc()).limit(200)
+    if user.role != "admin":
+        asset_query = asset_query.where(Meeting.owner_id == user.id)
+    for asset in db.scalars(asset_query):
+        meeting = meetings.get(asset.meeting_id)
+        items.append(asset_dict(asset) | {"meeting_title": meeting.title if meeting else "—", "creator": owners.get(meeting.owner_id, "未知") if meeting else "未知"})
+    return {"items": items, "total": len(items)}
+
+
+@app.get("/meeting-center/transcription")
+def meeting_center_transcription(db: Session = Depends(get_db), user: User = Depends(current_user)) -> dict[str, Any]:
+    meetings = {meeting.id: meeting for meeting in db.scalars(visible_meetings(select(Meeting), user))}
+    items = []
+    job_query = select(Job).join(Meeting, Meeting.id == Job.meeting_id).where(Job.kind == "transcription").order_by(Job.created_at.desc()).limit(200)
+    if user.role != "admin":
+        job_query = job_query.where(Meeting.owner_id == user.id)
+    for job in db.scalars(job_query):
+        meeting = meetings.get(job.meeting_id)
+        items.append(job_dict(job) | {"meeting_id": job.meeting_id, "meeting_title": meeting.title if meeting else "—"})
+    return {"items": items, "total": len(items)}
+
+
+@app.get("/assistant/runs")
+def assistant_runs(db: Session = Depends(get_db), user: User = Depends(current_user)) -> dict[str, Any]:
+    meetings = {meeting.id: meeting for meeting in db.scalars(visible_meetings(select(Meeting), user))}
+    items = []
+    run_query = select(AgentRun).join(Meeting, Meeting.id == AgentRun.meeting_id).order_by(AgentRun.created_at.desc()).limit(200)
+    if user.role != "admin":
+        run_query = run_query.where(Meeting.owner_id == user.id)
+    for run in db.scalars(run_query):
+        meeting = meetings.get(run.meeting_id)
+        items.append(run_dict(db, run) | {"meeting_title": meeting.title if meeting else "—"})
+    return {"items": items, "total": len(items)}
 
 
 @app.post("/meetings", status_code=201)
@@ -337,13 +454,13 @@ def create_meeting(payload: MeetingCreate, db: Session = Depends(get_db), user: 
 
 
 @app.get("/meetings/{meeting_id}")
-def get_meeting(meeting_id: int, db: Session = Depends(get_db), _: User = Depends(current_user)) -> dict[str, Any]:
-    return meeting_dict(db, ensure_meeting(db, meeting_id), detailed=True)
+def get_meeting(meeting_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)) -> dict[str, Any]:
+    return meeting_dict(db, authorize_meeting(db, meeting_id, user), detailed=True)
 
 
 @app.patch("/meetings/{meeting_id}")
-def update_meeting(meeting_id: int, payload: MeetingUpdate, db: Session = Depends(get_db), _: User = Depends(current_user)) -> dict[str, Any]:
-    meeting = ensure_meeting(db, meeting_id)
+def update_meeting(meeting_id: int, payload: MeetingUpdate, db: Session = Depends(get_db), user: User = Depends(current_user)) -> dict[str, Any]:
+    meeting = authorize_meeting(db, meeting_id, user)
     values = payload.model_dump(exclude_unset=True)
     if "participants" in values:
         meeting.participants_json = json_dumps(values.pop("participants"))
@@ -360,10 +477,17 @@ async def upload_asset(
     meeting_id: int,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    _: User = Depends(current_user),
+    user: User = Depends(current_user),
 ) -> dict[str, Any]:
-    ensure_meeting(db, meeting_id)
+    authorize_meeting(db, meeting_id, user)
     safe_name = Path(file.filename or "upload.bin").name
+    extension = Path(safe_name).suffix.lower()
+    expected_type = _ALLOWED_UPLOAD_TYPES.get(extension)
+    if not expected_type:
+        raise HTTPException(status_code=415, detail="仅支持 TXT、Markdown、PDF、DOCX、MP3、WAV、M4A、MP4 文件")
+    declared_type = (file.content_type or mimetypes.guess_type(safe_name)[0] or "").lower()
+    if declared_type and declared_type != expected_type and not (extension == ".wav" and declared_type == "audio/x-wav"):
+        raise HTTPException(status_code=415, detail="文件类型与扩展名不匹配")
     digest = hashlib.sha256()
     meeting_dir = settings.storage_dir / str(meeting_id)
     meeting_dir.mkdir(parents=True, exist_ok=True)
@@ -384,7 +508,7 @@ async def upload_asset(
             return asset_dict(existing)
         final_path = meeting_dir / f"{sha256[:16]}-{safe_name}"
         temp_path.replace(final_path)
-        media_type = file.content_type or mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
+        media_type = expected_type
         kind = "audio" if media_type.startswith(("audio/", "video/")) else "document"
         asset = MeetingAsset(
             meeting_id=meeting_id,
@@ -415,8 +539,8 @@ def public_asset(asset_id: int, expires: int, sig: str, db: Session = Depends(ge
 
 
 @app.post("/meetings/{meeting_id}/transcription", status_code=202)
-def queue_transcription(meeting_id: int, asset_id: int | None = None, db: Session = Depends(get_db), _: User = Depends(current_user)) -> dict[str, Any]:
-    ensure_meeting(db, meeting_id)
+def queue_transcription(meeting_id: int, asset_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(current_user)) -> dict[str, Any]:
+    authorize_meeting(db, meeting_id, user)
     if asset_id is None:
         asset_id = db.scalar(select(MeetingAsset.id).where(MeetingAsset.meeting_id == meeting_id).order_by(MeetingAsset.created_at.desc()).limit(1))
     asset = db.get(MeetingAsset, asset_id) if asset_id else None
@@ -429,17 +553,18 @@ def queue_transcription(meeting_id: int, asset_id: int | None = None, db: Sessio
 
 
 @app.get("/meetings/{meeting_id}/transcript")
-def transcript(meeting_id: int, db: Session = Depends(get_db), _: User = Depends(current_user)) -> dict[str, Any]:
-    ensure_meeting(db, meeting_id)
+def transcript(meeting_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)) -> dict[str, Any]:
+    authorize_meeting(db, meeting_id, user)
     segments = list(db.scalars(select(TranscriptSegment).where(TranscriptSegment.meeting_id == meeting_id).order_by(TranscriptSegment.ordinal)))
     return {"items": [segment_dict(item) for item in segments], "total": len(segments)}
 
 
 @app.patch("/transcript-segments/{segment_id}")
-def update_segment(segment_id: int, payload: SegmentUpdate, db: Session = Depends(get_db), _: User = Depends(current_user)) -> dict[str, Any]:
+def update_segment(segment_id: int, payload: SegmentUpdate, db: Session = Depends(get_db), user: User = Depends(current_user)) -> dict[str, Any]:
     segment = db.get(TranscriptSegment, segment_id)
     if not segment:
         raise HTTPException(status_code=404, detail="转写片段不存在")
+    authorize_meeting(db, segment.meeting_id, user)
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(segment, field, value)
     segment.evidence_hash = hashlib.sha256(f"{segment.start_ms}:{segment.end_ms}:{segment.text}".encode()).hexdigest()
@@ -452,9 +577,9 @@ def speaker_suggestions(
     meeting_id: int,
     use_ai: bool = Query(default=False),
     db: Session = Depends(get_db),
-    _: User = Depends(current_user),
+    user: User = Depends(current_user),
 ) -> dict[str, Any]:
-    meeting = ensure_meeting(db, meeting_id)
+    meeting = authorize_meeting(db, meeting_id, user)
     participants = json_loads(meeting.participants_json, [])
     segments = list(db.scalars(select(TranscriptSegment).where(TranscriptSegment.meeting_id == meeting_id).order_by(TranscriptSegment.ordinal)))
     labels = list(dict.fromkeys(segment.speaker_label for segment in segments))
@@ -483,8 +608,8 @@ def speaker_suggestions(
 
 
 @app.post("/meetings/{meeting_id}/minutes/generate", status_code=202)
-def queue_minutes(meeting_id: int, db: Session = Depends(get_db), _: User = Depends(current_user)) -> dict[str, Any]:
-    ensure_meeting(db, meeting_id)
+def queue_minutes(meeting_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)) -> dict[str, Any]:
+    authorize_meeting(db, meeting_id, user)
     segments = list(db.scalars(select(TranscriptSegment).where(TranscriptSegment.meeting_id == meeting_id).order_by(TranscriptSegment.ordinal)))
     if not segments:
         raise HTTPException(status_code=422, detail="请先完成会议转写")
@@ -496,15 +621,15 @@ def queue_minutes(meeting_id: int, db: Session = Depends(get_db), _: User = Depe
 
 
 @app.get("/meetings/{meeting_id}/minutes")
-def get_minutes(meeting_id: int, db: Session = Depends(get_db), _: User = Depends(current_user)) -> dict[str, Any]:
-    ensure_meeting(db, meeting_id)
+def get_minutes(meeting_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)) -> dict[str, Any]:
+    authorize_meeting(db, meeting_id, user)
     versions = list(db.scalars(select(MinutesVersion).where(MinutesVersion.meeting_id == meeting_id).order_by(MinutesVersion.version.desc())))
     return {"current": version_dict(db, versions[0]) if versions else None, "versions": [version_dict(db, item) for item in versions]}
 
 
 @app.post("/meetings/{meeting_id}/review-runs", status_code=202)
-def queue_review(meeting_id: int, db: Session = Depends(get_db), _: User = Depends(current_user)) -> dict[str, Any]:
-    ensure_meeting(db, meeting_id)
+def queue_review(meeting_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)) -> dict[str, Any]:
+    authorize_meeting(db, meeting_id, user)
     version = db.scalar(select(MinutesVersion).where(MinutesVersion.meeting_id == meeting_id).order_by(MinutesVersion.version.desc()).limit(1))
     if not version:
         raise HTTPException(status_code=422, detail="请先生成会议纪要")
@@ -520,25 +645,53 @@ def queue_review(meeting_id: int, db: Session = Depends(get_db), _: User = Depen
 
 
 @app.get("/review-runs/{run_id}")
-def get_review(run_id: int, db: Session = Depends(get_db), _: User = Depends(current_user)) -> dict[str, Any]:
-    return run_dict(db, ensure_run(db, run_id))
+def get_review(run_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)) -> dict[str, Any]:
+    return run_dict(db, authorize_run(db, run_id, user))
+
+
+@app.post("/review-runs/{run_id}/events-ticket")
+def create_review_events_ticket(run_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)) -> dict[str, Any]:
+    authorize_run(db, run_id, user)
+    expires = int(time.time()) + 60
+    ticket_id = secrets.token_urlsafe(18)
+    ticket = jwt.encode(
+        {"typ": "review_stream", "sub": str(user.id), "run_id": run_id, "jti": ticket_id, "exp": expires},
+        settings.jwt_secret,
+        algorithm="HS256",
+    )
+    return {"ticket": ticket, "expires_in": 60}
 
 
 @app.get("/review-runs/{run_id}/events")
 def review_events(
     request: Request,
     run_id: int,
-    token: str = Query(default=""),
+    ticket: str = Query(default=""),
     last_event_id: int | None = Header(default=None, alias="Last-Event-ID"),
 ) -> StreamingResponse:
-    # EventSource cannot set Authorization headers, so validate a short-lived bearer token from the query.
-    from .security import bearer as _unused  # noqa: F401
-    import jwt
-
     try:
-        jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+        claims = jwt.decode(ticket, settings.jwt_secret, algorithms=["HS256"])
+        if claims.get("typ") != "review_stream" or int(claims.get("run_id")) != run_id:
+            raise ValueError("审校流 ticket 无效")
+        user_id = int(claims["sub"])
+        ticket_id = str(claims["jti"])
     except jwt.PyJWTError as exc:
         raise HTTPException(status_code=401, detail="登录已失效") from exc
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=401, detail="登录已失效") from exc
+
+    if ticket_id in _used_review_tickets:
+        raise HTTPException(status_code=401, detail="审校流 ticket 已使用")
+    if len(_used_review_tickets) > 10000:
+        # shortcut: this single-process service keeps a bounded replay cache; move it to Redis for multi-worker scale.
+        _used_review_tickets.clear()
+    _used_review_tickets.add(ticket_id)
+
+    with SessionLocal() as db:
+        user = db.get(User, user_id)
+        if not user or not user.enabled:
+            raise HTTPException(status_code=401, detail="账号不可用")
+        authorize_run(db, run_id, user)
 
     async def stream():
         last_signature = ""
@@ -566,7 +719,7 @@ def review_events(
 
 @app.post("/review-runs/{run_id}/{action}")
 def decide_review(run_id: int, action: str, payload: RunDecision, db: Session = Depends(get_db), user: User = Depends(current_user)) -> dict[str, Any]:
-    run = ensure_run(db, run_id)
+    run = authorize_run(db, run_id, user)
     if action == "cancel":
         if run.status not in {"queued", "running"}:
             raise HTTPException(status_code=409, detail="当前状态不能取消")
@@ -663,8 +816,8 @@ def export_content(content: dict[str, Any]) -> list[tuple[str, list[str]]]:
 
 
 @app.get("/meetings/{meeting_id}/export")
-def export_minutes(meeting_id: int, format: str = Query(default="docx", pattern="^(docx|pdf)$"), db: Session = Depends(get_db), _: User = Depends(current_user)) -> Response:
-    meeting = ensure_meeting(db, meeting_id)
+def export_minutes(meeting_id: int, format: str = Query(default="docx", pattern="^(docx|pdf)$"), db: Session = Depends(get_db), user: User = Depends(current_user)) -> Response:
+    meeting = authorize_meeting(db, meeting_id, user)
     version = db.scalar(select(MinutesVersion).where(MinutesVersion.meeting_id == meeting_id).order_by(MinutesVersion.version.desc()).limit(1))
     if not version:
         raise HTTPException(status_code=422, detail="还没有可导出的纪要")
@@ -708,10 +861,19 @@ def export_minutes(meeting_id: int, format: str = Query(default="docx", pattern=
     return Response(buffer.getvalue(), media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_title}.pdf"})
 
 
-@app.get("/admin/observability")
-def observability(db: Session = Depends(get_db), _: User = Depends(require_admin)) -> dict[str, Any]:
-    jobs = list(db.scalars(select(Job).order_by(Job.created_at.desc()).limit(30)))
-    calls = list(db.scalars(select(AiCallLog).order_by(AiCallLog.created_at.desc()).limit(30)))
+def observability_payload(db: Session, user: User) -> dict[str, Any]:
+    if user.role == "admin":
+        jobs = list(db.scalars(select(Job).order_by(Job.created_at.desc()).limit(30)))
+        calls = list(db.scalars(select(AiCallLog).order_by(AiCallLog.created_at.desc()).limit(30)))
+        job_summary = select(Job)
+        call_summary = select(AiCallLog)
+    else:
+        job_query = select(Job).join(Meeting, Meeting.id == Job.meeting_id).where(Meeting.owner_id == user.id).order_by(Job.created_at.desc()).limit(30)
+        call_query = select(AiCallLog).join(Meeting, Meeting.id == AiCallLog.meeting_id).where(Meeting.owner_id == user.id).order_by(AiCallLog.created_at.desc()).limit(30)
+        jobs = list(db.scalars(job_query))
+        calls = list(db.scalars(call_query))
+        job_summary = select(Job).join(Meeting, Meeting.id == Job.meeting_id).where(Meeting.owner_id == user.id)
+        call_summary = select(AiCallLog).join(Meeting, Meeting.id == AiCallLog.meeting_id).where(Meeting.owner_id == user.id)
     by_purpose = {}
     for item in calls:
         bucket = by_purpose.setdefault(item.purpose, {"calls": 0, "success": 0, "tokens": 0, "duration_ms": 0})
@@ -730,13 +892,24 @@ def observability(db: Session = Depends(get_db), _: User = Depends(require_admin
             for item in calls
         ],
         "summary": {
-            "jobs_queued": db.scalar(select(func.count(Job.id)).where(Job.status == "queued")) or 0,
-            "jobs_failed": db.scalar(select(func.count(Job.id)).where(Job.status == "failed")) or 0,
-            "ai_calls": db.scalar(select(func.count(AiCallLog.id))) or 0,
-            "ai_failures": db.scalar(select(func.count(AiCallLog.id)).where(AiCallLog.success.is_(False))) or 0,
+            "jobs_queued": sum(1 for item in db.scalars(job_summary) if item.status == "queued"),
+            "jobs_failed": sum(1 for item in db.scalars(job_summary) if item.status == "failed"),
+            "ai_calls": sum(1 for _ in db.scalars(call_summary)),
+            "ai_failures": sum(1 for item in db.scalars(call_summary) if not item.success),
             "by_purpose": by_purpose,
         },
     }
+
+
+@app.get("/admin/observability")
+def observability(db: Session = Depends(get_db), user: User = Depends(require_admin)) -> dict[str, Any]:
+    return observability_payload(db, user)
+
+
+@app.get("/assistant/observability")
+def assistant_observability(db: Session = Depends(get_db), user: User = Depends(current_user)) -> dict[str, Any]:
+    """Employee-safe observability view for the assistant workbench."""
+    return observability_payload(db, user)
 
 
 def model_config_dict(item: AiModelConfig) -> dict[str, Any]:

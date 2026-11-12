@@ -93,8 +93,9 @@ def _probe_duration_ms(path: Path) -> int | None:
             capture_output=True,
             text=True,
             check=False,
+            timeout=settings.ffmpeg_timeout_seconds,
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return None
     matched = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", result.stderr)
     if not matched:
@@ -149,8 +150,9 @@ def split_audio_assets(db: Session, asset: MeetingAsset) -> list[tuple[MeetingAs
             capture_output=True,
             text=True,
             check=True,
+            timeout=settings.ffmpeg_timeout_seconds,
         )
-    except (OSError, subprocess.CalledProcessError):
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         # shortcut: if ffmpeg is unavailable, let the provider handle the original file.
         return [(asset, 0)]
     files = sorted(chunk_dir.glob("part-*.wav"))

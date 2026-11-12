@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.database import SessionLocal
-from app.models import Job
+from app.models import AgentRun, Job, MinutesVersion, User
 from app.worker import process
 
 
@@ -129,3 +129,47 @@ def test_admin_boundary(client: TestClient, auth: dict[str, str]):
         json={"username": "qa-user", "display_name": "测试员工", "password": "qa-password-123", "department_id": department.json()["id"]},
     )
     assert employee.status_code == 201
+
+
+def test_meeting_object_access_isolation(client: TestClient, auth: dict[str, str]):
+    admin = client.post("/auth/login", json={"username": "admin", "password": "demo123456"}).json()
+    admin_auth = {"Authorization": f"Bearer {admin['token']}"}
+    created = client.post(
+        "/meetings",
+        headers=admin_auth,
+        json={"title": "管理员私有会议", "starts_at": datetime.now(timezone.utc).isoformat(), "participants": []},
+    )
+    assert created.status_code == 201
+    meeting_id = created.json()["id"]
+
+    assert client.get(f"/meetings/{meeting_id}", headers=auth).status_code == 404
+    assert client.patch(f"/meetings/{meeting_id}", headers=auth, json={"title": "越权修改"}).status_code == 404
+    visible_ids = {item["id"] for item in client.get("/meetings", headers=auth).json()["items"]}
+    assert meeting_id not in visible_ids
+    assert client.get(f"/meetings/{meeting_id}", headers=admin_auth).status_code == 200
+
+
+def test_review_stream_ticket_is_bound_to_run_and_user(client: TestClient, auth: dict[str, str]):
+    created = client.post(
+        "/meetings",
+        headers=auth,
+        json={"title": "SSE ticket 测试", "starts_at": datetime.now(timezone.utc).isoformat(), "participants": []},
+    )
+    meeting_id = created.json()["id"]
+    with SessionLocal() as db:
+        owner_id = db.scalar(select(User.id).where(User.username == "demo"))
+        version = MinutesVersion(meeting_id=meeting_id, version=1, status="draft", source_digest="test", content_json="{}", created_by=owner_id)
+        db.add(version)
+        db.flush()
+        run = AgentRun(meeting_id=meeting_id, minutes_version_id=version.id, status="waiting_human")
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        run_id = run.id
+    ticket_response = client.post(f"/review-runs/{run_id}/events-ticket", headers=auth)
+    assert ticket_response.status_code == 200
+    ticket = ticket_response.json()["ticket"]
+    stream = client.get(f"/review-runs/{run_id}/events?ticket={ticket}")
+    assert stream.status_code == 200
+    assert "waiting_human" in stream.text
+    assert client.get(f"/review-runs/{run_id}/events?ticket={ticket}").status_code == 401
