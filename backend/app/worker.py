@@ -19,6 +19,7 @@ from .ai import QwenClient
 from .config import get_settings
 from .database import SessionLocal, init_db
 from .models import AgentRun, AgentStep, Job, Meeting, MeetingAsset, MinutesVersion, TranscriptSegment, utcnow
+from .schemas import MinutesContent
 from .seed import seed
 from .utils import digest_text, json_dumps, json_loads
 
@@ -185,6 +186,7 @@ def minutes_job(db: Session, job: Job) -> None:
         for item in segments
     ]
     content = QwenClient(db, meeting.id).generate_minutes(transcript, meeting.title) or fallback_minutes(segments)
+    content = MinutesContent.model_validate(content).model_dump(mode="json")
     valid_ids = {item.id for item in segments}
     for field in ("topics", "decisions", "action_items", "open_questions", "risks"):
         for item in content.get(field) or []:

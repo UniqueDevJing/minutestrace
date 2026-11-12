@@ -241,13 +241,13 @@ paths:
               schema: { type: string }
   /review-runs/{run_id}/{action}:
     post:
-      summary: Cancel, resume, apply or discard a run
+      summary: Cancel, resume, approve or reject a run
       parameters:
         - $ref: '#/components/parameters/RunId'
         - in: path
           name: action
           required: true
-          schema: { type: string, enum: [cancel, resume, apply, discard] }
+          schema: { type: string, enum: [cancel, resume, approve, reject] }
       requestBody:
         required: false
         content:

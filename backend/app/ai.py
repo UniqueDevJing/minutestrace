@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .models import AiCallLog
+from .schemas import MinutesContent
 
 
 class QwenClient:
@@ -19,7 +20,13 @@ class QwenClient:
     def enabled(self) -> bool:
         return bool(self.settings.llm_api_key)
 
-    def json_call(self, purpose: str, system: str, user: str) -> dict[str, Any] | None:
+    def json_call(
+        self,
+        purpose: str,
+        system: str,
+        user: str,
+        response_schema: type[MinutesContent] | None = None,
+    ) -> dict[str, Any] | None:
         if not self.enabled:
             return None
         started = time.perf_counter()
@@ -27,13 +34,23 @@ class QwenClient:
         error = ""
         prompt_tokens = completion_tokens = 0
         try:
+            response_format: dict[str, Any] = {"type": "json_object"}
+            if response_schema is not None:
+                response_format = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "minutes_content",
+                        "strict": True,
+                        "schema": response_schema.model_json_schema(),
+                    },
+                }
             response = httpx.post(
                 f"{self.settings.llm_base_url.rstrip('/')}/chat/completions",
                 headers={"Authorization": f"Bearer {self.settings.llm_api_key}"},
                 json={
                     "model": self.settings.llm_model,
                     "temperature": 0,
-                    "response_format": {"type": "json_object"},
+                    "response_format": response_format,
                     "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
                 },
                 timeout=90,
@@ -47,6 +64,8 @@ class QwenClient:
             if content.startswith("```"):
                 content = content.split("\n", 1)[1].rsplit("```", 1)[0]
             result = json.loads(content)
+            if response_schema is not None:
+                result = response_schema.model_validate(result).model_dump(mode="json")
             success = True
             return result
         except Exception as exc:  # provider failures are logged and deterministic fallback continues
@@ -82,6 +101,7 @@ class QwenClient:
             "minutes_generation",
             "你是会议纪要提取器。只记录转写中出现的事实。负责人或日期不明确时写待确认。每一项必须引用真实 segment id。只输出 JSON。",
             json.dumps({"meeting_title": title, "output_schema": schema, "transcript": transcript}, ensure_ascii=False),
+            response_schema=MinutesContent,
         )
 
     def review_minutes(self, minutes: dict[str, Any], transcript: list[dict[str, Any]]) -> list[dict[str, Any]]:
