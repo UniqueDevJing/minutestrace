@@ -61,9 +61,11 @@ install -m 0644 "${RELEASE_DIR}/deploy/minutestrace-worker.service" /etc/systemd
 install -m 0644 "${RELEASE_DIR}/deploy/minutestrace-locations.conf" /etc/nginx/minutestrace-locations.conf
 
 STAMP="$(date +%Y%m%d-%H%M%S)"
+BACKUP_DIR="/etc/nginx/backups/${STAMP}"
+install -d -m 0700 "${BACKUP_DIR}"
 for site in /etc/nginx/sites-enabled/crossborder /etc/nginx/sites-enabled/domain-https /etc/nginx/sites-enabled/ip-root; do
   if ! grep -q 'minutestrace-locations.conf' "${site}"; then
-    cp -a "${site}" "${site}.bak-${STAMP}"
+    cp -a "${site}" "${BACKUP_DIR}/$(basename "${site}")"
     sed -i '/include \/etc\/nginx\/hospital-v2-locations.conf;/a\    include /etc/nginx/minutestrace-locations.conf;' "${site}"
   fi
 done
