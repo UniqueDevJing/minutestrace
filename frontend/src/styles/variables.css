@@ -40,6 +40,15 @@
   --duration-fast: 160ms;
   --duration: 260ms;
   --duration-slow: 700ms;
+  --app-bg: #f3f5f9;
+  --app-surface: #ffffff;
+  --app-ink: #1d2840;
+  --app-muted: #7d8a9f;
+  --app-line: #e6eaf1;
+  --app-blue: #3568f5;
+  --app-green: #35b77a;
+  --app-orange: #f2a33a;
+  --app-purple: #8667e8;
   font-family: var(--font-sans);
   color: var(--ink-on-dark);
   background: var(--bg);

@@ -7,7 +7,7 @@ import mimetypes
 import time
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -243,8 +243,42 @@ def me(user: User = Depends(current_user)) -> dict[str, Any]:
 
 @app.get("/dashboard")
 def dashboard(db: Session = Depends(get_db), _: User = Depends(current_user)) -> dict[str, Any]:
-    meetings = list(db.scalars(select(Meeting).order_by(Meeting.starts_at.desc()).limit(6)))
+    all_meetings = list(db.scalars(select(Meeting).order_by(Meeting.starts_at.desc())))
+    meetings = all_meetings[:6]
     action_items = list(db.scalars(select(ActionItem).where(ActionItem.status == "open").order_by(ActionItem.created_at.desc()).limit(8)))
+    all_minutes = list(db.scalars(select(MinutesVersion)))
+    ai_calls = list(db.scalars(select(AiCallLog)))
+    now = datetime.utcnow()
+    trend = []
+    for offset in range(6, -1, -1):
+        day = (now - timedelta(days=offset)).date()
+        trend.append({"label": day.strftime("%m/%d"), "value": sum(1 for item in all_meetings if item.starts_at and item.starts_at.date() == day)})
+    meeting_status_labels = {"ended": "已完成", "draft": "草稿", "scheduled": "待开始", "live": "进行中", "archived": "已归档"}
+    meeting_status = []
+    for status_name, label in meeting_status_labels.items():
+        count = sum(1 for item in all_meetings if item.status == status_name)
+        if count:
+            meeting_status.append({"label": label, "value": count})
+    if not meeting_status:
+        meeting_status = [{"label": "暂无数据", "value": 0}]
+    review_status_labels = {"approved": "已批准", "draft": "待生成", "waiting_human": "待审核"}
+    review_status = []
+    for status_name, label in review_status_labels.items():
+        count = sum(1 for item in all_minutes if item.status == status_name)
+        if count:
+            review_status.append({"label": label, "value": count})
+    if not review_status:
+        review_status = [{"label": "暂无数据", "value": 0}]
+    successful_calls = sum(1 for item in ai_calls if item.success)
+    token_total = sum((item.prompt_tokens or 0) + (item.completion_tokens or 0) for item in ai_calls)
+    avg_latency = round(sum(item.duration_ms or 0 for item in ai_calls) / len(ai_calls)) if ai_calls else 0
+    minutes_meeting_ids = {item.meeting_id for item in all_minutes}
+    completion_rate = round(sum(1 for item in all_meetings if item.id in minutes_meeting_ids) / len(all_meetings) * 100) if all_meetings else 0
+    recent_window = now - timedelta(days=7)
+    previous_window = now - timedelta(days=14)
+    recent_meetings = sum(1 for item in all_meetings if item.starts_at and item.starts_at >= recent_window)
+    previous_meetings = sum(1 for item in all_meetings if item.starts_at and previous_window <= item.starts_at < recent_window)
+    meeting_growth = round((recent_meetings - previous_meetings) / previous_meetings * 100) if previous_meetings else 0
     return {
         "stats": {
             "meetings": db.scalar(select(func.count(Meeting.id))) or 0,
@@ -257,6 +291,20 @@ def dashboard(db: Session = Depends(get_db), _: User = Depends(current_user)) ->
             {"id": item.id, "meeting_id": item.meeting_id, "title": item.title, "owner": item.owner_name, "due": item.due_text, "status": item.status}
             for item in action_items
         ],
+        "analytics": {
+            "meeting_trend": trend,
+            "meeting_status": meeting_status,
+            "review_status": review_status,
+            "review_total": len(all_minutes),
+            "minutes_completion_rate": completion_rate,
+            "meeting_growth": meeting_growth,
+            "ai": {
+                "calls": len(ai_calls),
+                "success_rate": round(successful_calls / len(ai_calls) * 100) if ai_calls else 100,
+                "avg_latency_ms": avg_latency,
+                "token_total": token_total,
+            },
+        },
     }
 
 
