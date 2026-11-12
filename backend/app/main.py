@@ -31,15 +31,30 @@ from .models import (
     AgentRun,
     AgentStep,
     AiCallLog,
+    AiModelConfig,
+    Department,
+    EmployeeProfile,
     Job,
     Meeting,
     MeetingAsset,
     MinutesVersion,
+    PromptTemplate,
     TranscriptSegment,
     User,
 )
-from .schemas import LoginRequest, MeetingCreate, MeetingUpdate, RunDecision, SegmentUpdate
-from .security import current_user, issue_token, require_admin, verify_password
+from .schemas import (
+    AiModelConfigUpdate,
+    DepartmentCreate,
+    EmployeeCreate,
+    EmployeeUpdate,
+    LoginRequest,
+    MeetingCreate,
+    MeetingUpdate,
+    PromptTemplateCreate,
+    RunDecision,
+    SegmentUpdate,
+)
+from .security import current_user, hash_password, issue_token, require_admin, verify_password
 from .seed import seed
 from .utils import iso, json_dumps, json_loads
 from .worker import create_job, sign_asset
@@ -649,6 +664,13 @@ def export_minutes(meeting_id: int, format: str = Query(default="docx", pattern=
 def observability(db: Session = Depends(get_db), _: User = Depends(require_admin)) -> dict[str, Any]:
     jobs = list(db.scalars(select(Job).order_by(Job.created_at.desc()).limit(30)))
     calls = list(db.scalars(select(AiCallLog).order_by(AiCallLog.created_at.desc()).limit(30)))
+    by_purpose = {}
+    for item in calls:
+        bucket = by_purpose.setdefault(item.purpose, {"calls": 0, "success": 0, "tokens": 0, "duration_ms": 0})
+        bucket["calls"] += 1
+        bucket["success"] += int(item.success)
+        bucket["tokens"] += item.prompt_tokens + item.completion_tokens
+        bucket["duration_ms"] += item.duration_ms
     return {
         "jobs": [job_dict(item) | {"meeting_id": item.meeting_id, "attempt": item.attempt, "created_at": iso(item.created_at)} for item in jobs],
         "ai_calls": [
@@ -664,5 +686,159 @@ def observability(db: Session = Depends(get_db), _: User = Depends(require_admin
             "jobs_failed": db.scalar(select(func.count(Job.id)).where(Job.status == "failed")) or 0,
             "ai_calls": db.scalar(select(func.count(AiCallLog.id))) or 0,
             "ai_failures": db.scalar(select(func.count(AiCallLog.id)).where(AiCallLog.success.is_(False))) or 0,
+            "by_purpose": by_purpose,
         },
     }
+
+
+def model_config_dict(item: AiModelConfig) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "purpose": item.purpose,
+        "provider": item.provider,
+        "model": item.model,
+        "base_url": item.base_url,
+        "enabled": item.enabled,
+        "updated_at": iso(item.updated_at),
+    }
+
+
+@app.get("/admin/models")
+def list_model_configs(db: Session = Depends(get_db), _: User = Depends(require_admin)) -> dict[str, Any]:
+    items = list(db.scalars(select(AiModelConfig).order_by(AiModelConfig.purpose)))
+    return {"items": [model_config_dict(item) for item in items]}
+
+
+@app.put("/admin/models/{purpose}")
+def update_model_config(
+    purpose: str,
+    payload: AiModelConfigUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> dict[str, Any]:
+    item = db.scalar(select(AiModelConfig).where(AiModelConfig.purpose == purpose))
+    if not item:
+        item = AiModelConfig(purpose=purpose)
+        db.add(item)
+    for field, value in payload.model_dump().items():
+        setattr(item, field, value)
+    db.commit()
+    db.refresh(item)
+    return model_config_dict(item)
+
+
+def prompt_dict(item: PromptTemplate) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "purpose": item.purpose,
+        "version": item.version,
+        "name": item.name,
+        "template": item.template,
+        "variables": json_loads(item.variables_json, []),
+        "enabled": item.enabled,
+        "created_at": iso(item.created_at),
+    }
+
+
+@app.get("/admin/prompts")
+def list_prompts(db: Session = Depends(get_db), _: User = Depends(require_admin)) -> dict[str, Any]:
+    items = list(db.scalars(select(PromptTemplate).order_by(PromptTemplate.purpose, PromptTemplate.version.desc())))
+    return {"items": [prompt_dict(item) for item in items]}
+
+
+@app.post("/admin/prompts", status_code=201)
+def create_prompt(payload: PromptTemplateCreate, db: Session = Depends(get_db), user: User = Depends(require_admin)) -> dict[str, Any]:
+    missing = [name for name in payload.variables if "{{" + name + "}}" not in payload.template]
+    if missing:
+        raise HTTPException(status_code=422, detail=f"Prompt 缺少变量占位符：{', '.join(missing)}")
+    latest = db.scalar(select(func.max(PromptTemplate.version)).where(PromptTemplate.purpose == payload.purpose)) or 0
+    db.query(PromptTemplate).filter(PromptTemplate.purpose == payload.purpose).update({"enabled": False})
+    item = PromptTemplate(
+        purpose=payload.purpose,
+        version=latest + 1,
+        name=payload.name,
+        template=payload.template,
+        variables_json=json_dumps(payload.variables),
+        enabled=True,
+        created_by=user.id,
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return prompt_dict(item)
+
+
+@app.get("/admin/departments")
+def list_departments(db: Session = Depends(get_db), _: User = Depends(require_admin)) -> dict[str, Any]:
+    items = list(db.scalars(select(Department).order_by(Department.name)))
+    return {"items": [{"id": item.id, "name": item.name, "code": item.code, "enabled": item.enabled} for item in items]}
+
+
+@app.post("/admin/departments", status_code=201)
+def create_department(payload: DepartmentCreate, db: Session = Depends(get_db), _: User = Depends(require_admin)) -> dict[str, Any]:
+    if db.scalar(select(Department).where((Department.name == payload.name) | (Department.code == payload.code))):
+        raise HTTPException(status_code=409, detail="部门名称或编码已存在")
+    item = Department(name=payload.name, code=payload.code)
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return {"id": item.id, "name": item.name, "code": item.code, "enabled": item.enabled}
+
+
+@app.get("/admin/employees")
+def list_employees(db: Session = Depends(get_db), _: User = Depends(require_admin)) -> dict[str, Any]:
+    profiles = {item.user_id: item for item in db.scalars(select(EmployeeProfile))}
+    departments = {item.id: item for item in db.scalars(select(Department))}
+    items = []
+    for user in db.scalars(select(User).order_by(User.created_at.desc())):
+        profile = profiles.get(user.id)
+        department = departments.get(profile.department_id) if profile and profile.department_id else None
+        items.append(
+            {
+                "id": user.id,
+                "username": user.username,
+                "display_name": user.display_name,
+                "role": user.role,
+                "enabled": user.enabled,
+                "title": profile.title if profile else "",
+                "department_id": profile.department_id if profile else None,
+                "department_name": department.name if department else "",
+            }
+        )
+    return {"items": items}
+
+
+@app.post("/admin/employees", status_code=201)
+def create_employee(payload: EmployeeCreate, db: Session = Depends(get_db), _: User = Depends(require_admin)) -> dict[str, Any]:
+    if db.scalar(select(User).where(User.username == payload.username)):
+        raise HTTPException(status_code=409, detail="用户名已存在")
+    user = User(
+        username=payload.username,
+        display_name=payload.display_name,
+        password_hash=hash_password(payload.password),
+        role=payload.role,
+    )
+    db.add(user)
+    db.flush()
+    db.add(EmployeeProfile(user_id=user.id, department_id=payload.department_id, title=payload.title))
+    db.commit()
+    return {"id": user.id, "username": user.username, "display_name": user.display_name, "role": user.role, "enabled": user.enabled}
+
+
+@app.patch("/admin/employees/{user_id}")
+def update_employee(user_id: int, payload: EmployeeUpdate, db: Session = Depends(get_db), _: User = Depends(require_admin)) -> dict[str, Any]:
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="员工不存在")
+    values = payload.model_dump(exclude_unset=True)
+    profile_values = {key: values.pop(key) for key in ("department_id", "title") if key in values}
+    for field, value in values.items():
+        setattr(user, field, value)
+    profile = db.scalar(select(EmployeeProfile).where(EmployeeProfile.user_id == user.id))
+    if not profile:
+        profile = EmployeeProfile(user_id=user.id)
+        db.add(profile)
+    for field, value in profile_values.items():
+        setattr(profile, field, value)
+    db.commit()
+    return {"id": user.id, "username": user.username, "display_name": user.display_name, "role": user.role, "enabled": user.enabled}

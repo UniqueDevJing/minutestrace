@@ -18,7 +18,7 @@ from .agent_graph import build_review_graph
 from .ai import QwenClient
 from .config import get_settings
 from .database import SessionLocal, init_db
-from .models import AgentRun, AgentStep, AiCallLog, Job, Meeting, MeetingAsset, MinutesVersion, TranscriptSegment, utcnow
+from .models import AgentRun, AgentStep, AiCallLog, AiModelConfig, Job, Meeting, MeetingAsset, MinutesVersion, TranscriptSegment, utcnow
 from .schemas import MinutesContent
 from .seed import seed
 from .utils import digest_text, json_dumps, json_loads
@@ -180,6 +180,11 @@ def split_audio_assets(db: Session, asset: MeetingAsset) -> list[tuple[MeetingAs
 
 def asr_transcribe(db: Session, asset: MeetingAsset, offset_ms: int = 0) -> list[dict[str, Any]]:
     settings = get_settings()
+    model_config = db.scalar(select(AiModelConfig).where(AiModelConfig.purpose == "transcription"))
+    if model_config and not model_config.enabled:
+        raise RuntimeError("转写模型已停用")
+    asr_model = model_config.model if model_config else settings.asr_model
+    asr_base_url = model_config.base_url if model_config else settings.asr_base_url
     started = time.perf_counter()
     success = False
     error = ""
@@ -188,10 +193,10 @@ def asr_transcribe(db: Session, asset: MeetingAsset, offset_ms: int = 0) -> list
         raise RuntimeError(error)
     try:
         submit = httpx.post(
-            f"{settings.asr_base_url.rstrip('/')}/services/audio/asr/transcription",
+            f"{asr_base_url.rstrip('/')}/services/audio/asr/transcription",
             headers={"Authorization": f"Bearer {settings.llm_api_key}", "X-DashScope-Async": "enable"},
             json={
-                "model": settings.asr_model,
+                "model": asr_model,
                 "input": {"file_urls": [public_asset_url(asset.id)]},
                 "parameters": {"channel_id": [0], "diarization_enabled": True, "language_hints": ["zh", "en"]},
             },
@@ -202,7 +207,7 @@ def asr_transcribe(db: Session, asset: MeetingAsset, offset_ms: int = 0) -> list
         deadline = time.time() + 1800
         while time.time() < deadline:
             response = httpx.get(
-                f"{settings.asr_base_url.rstrip('/')}/tasks/{task_id}",
+                f"{asr_base_url.rstrip('/')}/tasks/{task_id}",
                 headers={"Authorization": f"Bearer {settings.llm_api_key}"},
                 timeout=30,
             )
@@ -237,7 +242,7 @@ def asr_transcribe(db: Session, asset: MeetingAsset, offset_ms: int = 0) -> list
             AiCallLog(
                 meeting_id=asset.meeting_id,
                 purpose="transcription",
-                model=settings.asr_model,
+                model=asr_model,
                 success=success,
                 duration_ms=int((time.perf_counter() - started) * 1000),
                 error=error,

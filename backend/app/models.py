@@ -154,3 +154,49 @@ class AiCallLog(Base, TimestampMixin):
     completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str] = mapped_column(String(500), default="")
+
+
+class AiModelConfig(Base, TimestampMixin):
+    __tablename__ = "mt_ai_model_config"
+    __table_args__ = (UniqueConstraint("purpose", name="uq_mt_ai_model_purpose"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    purpose: Mapped[str] = mapped_column(String(40), index=True)
+    provider: Mapped[str] = mapped_column(String(40), default="dashscope")
+    model: Mapped[str] = mapped_column(String(120))
+    base_url: Mapped[str] = mapped_column(String(500))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    settings_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class PromptTemplate(Base, TimestampMixin):
+    __tablename__ = "mt_prompt_template"
+    __table_args__ = (UniqueConstraint("purpose", "version", name="uq_mt_prompt_version"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    purpose: Mapped[str] = mapped_column(String(40), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    name: Mapped[str] = mapped_column(String(120))
+    template: Mapped[str] = mapped_column(Text)
+    variables_json: Mapped[str] = mapped_column(Text, default="[]")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("mt_user.id"), nullable=True)
+
+
+class Department(Base, TimestampMixin):
+    __tablename__ = "mt_department"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True)
+    code: Mapped[str] = mapped_column(String(40), unique=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class EmployeeProfile(Base, TimestampMixin):
+    __tablename__ = "mt_employee_profile"
+    __table_args__ = (UniqueConstraint("user_id", name="uq_mt_employee_user"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("mt_user.id"), index=True)
+    department_id: Mapped[int | None] = mapped_column(ForeignKey("mt_department.id"), nullable=True)
+    title: Mapped[str] = mapped_column(String(120), default="")

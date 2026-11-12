@@ -4,10 +4,11 @@ from typing import Any
 
 import httpx
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import get_settings
-from .models import AiCallLog
+from .models import AiCallLog, AiModelConfig, PromptTemplate
 from .schemas import MinutesContent, SpeakerSuggestions
 
 
@@ -20,6 +21,24 @@ class QwenClient:
     @property
     def enabled(self) -> bool:
         return bool(self.settings.llm_api_key)
+
+    def model_settings(self, purpose: str) -> tuple[str, str]:
+        config = self.db.scalar(select(AiModelConfig).where(AiModelConfig.purpose == purpose, AiModelConfig.enabled.is_(True)))
+        if config:
+            return config.model, config.base_url
+        disabled = self.db.scalar(select(AiModelConfig).where(AiModelConfig.purpose == purpose, AiModelConfig.enabled.is_(False)))
+        if disabled:
+            return "", ""
+        return self.settings.llm_model, self.settings.llm_base_url
+
+    def prompt(self, purpose: str, fallback: str) -> str:
+        template = self.db.scalar(
+            select(PromptTemplate)
+            .where(PromptTemplate.purpose == purpose, PromptTemplate.enabled.is_(True))
+            .order_by(PromptTemplate.version.desc())
+            .limit(1)
+        )
+        return template.template if template else fallback
 
     def json_call(
         self,
@@ -34,22 +53,25 @@ class QwenClient:
         success = False
         error = ""
         prompt_tokens = completion_tokens = 0
+        model, base_url = self.model_settings(purpose)
+        if not model or not base_url:
+            return None
         try:
             response_format: dict[str, Any] = {"type": "json_object"}
             if response_schema is not None:
                 response_format = {
                     "type": "json_schema",
                     "json_schema": {
-                        "name": "minutes_content",
+                        "name": response_schema.__name__.lower(),
                         "strict": True,
                         "schema": response_schema.model_json_schema(),
                     },
                 }
             response = httpx.post(
-                f"{self.settings.llm_base_url.rstrip('/')}/chat/completions",
+                f"{base_url.rstrip('/')}/chat/completions",
                 headers={"Authorization": f"Bearer {self.settings.llm_api_key}"},
                 json={
-                    "model": self.settings.llm_model,
+                    "model": model,
                     "temperature": 0,
                     "response_format": response_format,
                     "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -77,7 +99,7 @@ class QwenClient:
                 AiCallLog(
                     meeting_id=self.meeting_id,
                     purpose=purpose,
-                    model=self.settings.llm_model,
+                    model=model,
                     success=success,
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
@@ -100,7 +122,7 @@ class QwenClient:
         }
         return self.json_call(
             "minutes_generation",
-            "你是会议纪要提取器。只记录转写中出现的事实。负责人或日期不明确时写待确认。每一项必须引用真实 segment id。只输出 JSON。",
+            self.prompt("minutes_generation", "你是会议纪要提取器。只记录转写中出现的事实。负责人或日期不明确时写待确认。每一项必须引用真实 segment id。只输出 JSON。"),
             json.dumps({"meeting_title": title, "output_schema": schema, "transcript": transcript}, ensure_ascii=False),
             response_schema=MinutesContent,
         )
@@ -108,7 +130,7 @@ class QwenClient:
     def review_minutes(self, minutes: dict[str, Any], transcript: list[dict[str, Any]]) -> list[dict[str, Any]]:
         result = self.json_call(
             "minutes_review",
-            "对照转写审查纪要。分别检查完整性、可落实性和无来源事实。只输出 {issues:[{field,index,severity,message}]} JSON。",
+            self.prompt("minutes_review", "对照转写审查纪要。分别检查完整性、可落实性和无来源事实。只输出 {issues:[{field,index,severity,message}]} JSON。"),
             json.dumps({"minutes": minutes, "transcript": transcript}, ensure_ascii=False),
         )
         return (result or {}).get("issues", []) if isinstance(result, dict) else []
@@ -116,7 +138,7 @@ class QwenClient:
     def suggest_speakers(self, participants: list[str], transcript: list[dict[str, Any]]) -> list[dict[str, Any]]:
         result = self.json_call(
             "speaker_matching",
-            "根据参会人名单和转写片段，建议 speaker_label 对应的人。只能从参会人名单中选择，无法判断时使用待确认。只输出 JSON。",
+            self.prompt("speaker_matching", "根据参会人名单和转写片段，建议 speaker_label 对应的人。只能从参会人名单中选择，无法判断时使用待确认。只输出 JSON。"),
             json.dumps({"participants": participants, "transcript": transcript[:120]}, ensure_ascii=False),
             response_schema=SpeakerSuggestions,
         )
@@ -125,6 +147,6 @@ class QwenClient:
     def revise_minutes(self, minutes: dict[str, Any], issues: list[dict[str, Any]], transcript: list[dict[str, Any]]) -> dict[str, Any] | None:
         return self.json_call(
             "minutes_revision",
-            "按问题清单修订纪要。不得新增转写中没有的事实，必须保留 evidence_segment_ids；缺失负责人或日期写待确认。输出完整纪要 JSON。",
+            self.prompt("minutes_revision", "按问题清单修订纪要。不得新增转写中没有的事实，必须保留 evidence_segment_ids；缺失负责人或日期写待确认。输出完整纪要 JSON。"),
             json.dumps({"minutes": minutes, "issues": issues, "transcript": transcript}, ensure_ascii=False),
         )

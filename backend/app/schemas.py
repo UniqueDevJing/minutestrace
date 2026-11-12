@@ -90,3 +90,39 @@ class SpeakerSuggestion(BaseModel):
 
 class SpeakerSuggestions(BaseModel):
     suggestions: list[SpeakerSuggestion]
+
+
+class AiModelConfigUpdate(BaseModel):
+    model: str = Field(min_length=1, max_length=120)
+    base_url: str = Field(min_length=1, max_length=500)
+    provider: str = Field(default="dashscope", min_length=1, max_length=40)
+    enabled: bool = True
+
+
+class PromptTemplateCreate(BaseModel):
+    purpose: str = Field(min_length=1, max_length=40)
+    name: str = Field(min_length=1, max_length=120)
+    template: str = Field(min_length=1, max_length=12000)
+    variables: list[str] = Field(default_factory=list, max_length=30)
+
+
+class DepartmentCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    code: str = Field(min_length=1, max_length=40)
+
+
+class EmployeeCreate(BaseModel):
+    username: str = Field(min_length=3, max_length=50)
+    display_name: str = Field(min_length=1, max_length=80)
+    password: str = Field(min_length=8, max_length=128)
+    role: str = Field(default="employee", pattern="^(employee|admin)$")
+    department_id: int | None = None
+    title: str = Field(default="", max_length=120)
+
+
+class EmployeeUpdate(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1, max_length=80)
+    role: str | None = Field(default=None, pattern="^(employee|admin)$")
+    enabled: bool | None = None
+    department_id: int | None = None
+    title: str | None = Field(default=None, max_length=120)

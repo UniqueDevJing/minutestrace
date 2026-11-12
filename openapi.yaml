@@ -287,6 +287,64 @@ paths:
             application/json:
               schema: { type: object, additionalProperties: true }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/models:
+    get:
+      summary: List configured AI models
+      responses:
+        '200': { description: Model configurations, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/models/{purpose}:
+    put:
+      summary: Update one AI model purpose
+      parameters:
+        - in: path
+          name: purpose
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { type: object, required: [model, base_url], additionalProperties: true } }
+      responses:
+        '200': { description: Updated model configuration }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/prompts:
+    get:
+      summary: List versioned prompt templates
+      responses:
+        '200': { description: Prompt templates, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+    post:
+      summary: Create a versioned prompt template
+      responses:
+        '201': { description: Created prompt template }
+  /admin/departments:
+    get:
+      summary: List departments
+      responses:
+        '200': { description: Departments }
+    post:
+      summary: Create a department
+      responses:
+        '201': { description: Created department }
+  /admin/employees:
+    get:
+      summary: List employees
+      responses:
+        '200': { description: Employees }
+    post:
+      summary: Create an employee account
+      responses:
+        '201': { description: Created employee }
+  /admin/employees/{user_id}:
+    patch:
+      summary: Update employee role, status or department
+      parameters:
+        - in: path
+          name: user_id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200': { description: Updated employee }
 components:
   securitySchemes:
     bearerAuth:

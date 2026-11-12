@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import get_settings
-from .models import ActionItem, Meeting, MinutesVersion, TranscriptSegment, User
+from .models import ActionItem, AiModelConfig, Department, EmployeeProfile, Meeting, MinutesVersion, PromptTemplate, TranscriptSegment, User
 from .security import hash_password
 from .utils import digest_text, json_dumps
 
@@ -31,9 +31,38 @@ def seed(db: Session) -> None:
             ]
         )
         db.commit()
+    demo = db.scalar(select(User).where(User.username == "demo"))
+    admin = db.scalar(select(User).where(User.username == "admin"))
+    department = db.scalar(select(Department).where(Department.code == "product"))
+    if not department:
+        department = Department(name="产品与工程", code="product")
+        db.add(department)
+        db.flush()
+    if demo and not db.scalar(select(EmployeeProfile).where(EmployeeProfile.user_id == demo.id)):
+        db.add(EmployeeProfile(user_id=demo.id, department_id=department.id, title="项目成员"))
+    if admin and not db.scalar(select(EmployeeProfile).where(EmployeeProfile.user_id == admin.id)):
+        db.add(EmployeeProfile(user_id=admin.id, department_id=department.id, title="系统管理员"))
+    model_defaults = {
+        "transcription": ("paraformer-v2", settings.asr_base_url),
+        "minutes_generation": (settings.llm_model, settings.llm_base_url),
+        "minutes_review": (settings.llm_model, settings.llm_base_url),
+        "speaker_matching": (settings.llm_model, settings.llm_base_url),
+    }
+    for purpose, (model, base_url) in model_defaults.items():
+        if not db.scalar(select(AiModelConfig).where(AiModelConfig.purpose == purpose)):
+            db.add(AiModelConfig(purpose=purpose, model=model, base_url=base_url))
+    prompt_defaults = {
+        "minutes_generation": ("纪要生成", "你是会议纪要提取器。只记录转写中出现的事实。负责人或日期不明确时写待确认。每一项必须引用真实 segment id。只输出 JSON。"),
+        "minutes_review": ("纪要审查", "对照转写审查纪要。分别检查完整性、可落实性和无来源事实。只输出 {issues:[{field,index,severity,message}]} JSON。"),
+        "minutes_revision": ("纪要修订", "按问题清单修订纪要。不得新增转写中没有的事实，必须保留 evidence_segment_ids；缺失负责人或日期写待确认。输出完整纪要 JSON。"),
+        "speaker_matching": ("说话人匹配", "根据参会人名单和转写片段，建议 speaker_label 对应的人。只能从参会人名单中选择，无法判断时使用待确认。只输出 JSON。"),
+    }
+    for purpose, (name, template) in prompt_defaults.items():
+        if not db.scalar(select(PromptTemplate).where(PromptTemplate.purpose == purpose, PromptTemplate.version == 1)):
+            db.add(PromptTemplate(purpose=purpose, version=1, name=name, template=template, created_by=admin.id if admin else None))
+    db.commit()
     if db.scalar(select(Meeting.id).limit(1)):
         return
-    demo = db.scalar(select(User).where(User.username == "demo"))
     meeting = Meeting(
         title="证据化纪要发布评审",
         status="ended",

@@ -104,3 +104,28 @@ def test_admin_boundary(client: TestClient, auth: dict[str, str]):
     response = client.get("/admin/observability", headers={"Authorization": f"Bearer {admin['token']}"})
     assert response.status_code == 200
     assert "jobs" in response.json()
+
+    models = client.get("/admin/models", headers={"Authorization": f"Bearer {admin['token']}"})
+    assert models.status_code == 200
+    assert {item["purpose"] for item in models.json()["items"]} >= {"transcription", "minutes_generation", "speaker_matching"}
+
+    prompt = client.post(
+        "/admin/prompts",
+        headers={"Authorization": f"Bearer {admin['token']}"},
+        json={"purpose": "minutes_generation", "name": "测试版本", "template": "只输出 {{transcript}}", "variables": ["transcript"]},
+    )
+    assert prompt.status_code == 201
+    assert prompt.json()["version"] == 2
+
+    department = client.post(
+        "/admin/departments",
+        headers={"Authorization": f"Bearer {admin['token']}"},
+        json={"name": "测试部门", "code": "qa"},
+    )
+    assert department.status_code == 201
+    employee = client.post(
+        "/admin/employees",
+        headers={"Authorization": f"Bearer {admin['token']}"},
+        json={"username": "qa-user", "display_name": "测试员工", "password": "qa-password-123", "department_id": department.json()["id"]},
+    )
+    assert employee.status_code == 201
