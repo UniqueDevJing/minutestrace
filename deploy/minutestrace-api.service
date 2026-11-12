@@ -9,7 +9,7 @@ Group=www-data
 WorkingDirectory=/opt/minutestrace/backend
 EnvironmentFile=/opt/minutestrace/minutestrace.env
 Environment=PYTHONPATH=/opt/minutestrace/backend
-ExecStart=/opt/minutestrace/venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 18119 --workers 2 --proxy-headers
+ExecStart=/opt/minutestrace/venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 18119 --workers 1 --proxy-headers
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true
