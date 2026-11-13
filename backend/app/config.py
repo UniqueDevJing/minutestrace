@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     asr_base_url: str = "https://dashscope.aliyuncs.com/api/v1"
     asr_model: str = "paraformer-v2"
     demo_password: str = "demo123456"
+    public_demo: bool = False
     worker_stale_seconds: int = 180
     job_max_attempts: int = 3
     asr_segment_minutes: int = 20
@@ -41,7 +42,7 @@ def validate_runtime_settings(settings: Settings) -> None:
         raise RuntimeError("生产环境必须配置随机且至少 32 字符的 MINUTESTRACE_JWT_SECRET")
     if settings.database_url.startswith("sqlite:"):
         raise RuntimeError("生产环境必须使用受支持的持久化数据库，不能使用 SQLite")
-    if settings.demo_password in {"", "demo123456"}:
+    if settings.demo_password in {"", "demo123456"} and not settings.public_demo:
         raise RuntimeError("生产环境不能使用默认演示密码")
 
 

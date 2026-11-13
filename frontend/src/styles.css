@@ -546,3 +546,20 @@ h3 { font-size: 17px; }
   .login-panel { min-height: auto; padding: 30px 20px 42px; }
   .login-panel h2 { font-size: 31px; }
 }
+
+/* Portfolio polish: give the evidence workspace a calmer hierarchy and a
+   stronger first impression without changing page-level business behavior. */
+.product-shell .page-wrap { background: linear-gradient(180deg, rgba(255,255,255,.16), transparent 18rem); }
+.product-shell .breadcrumb span { letter-spacing: .02em; }
+.product-shell .topbar .button.primary { min-height: 46px; padding-inline: 18px; font-size: 13px; }
+.product-shell .dashboard-heading h1, .product-shell .module-heading h1, .product-shell .detail-head h1 { letter-spacing: -.055em; }
+.product-shell .dashboard-heading p, .product-shell .module-heading p, .product-shell .detail-head p { max-width: 680px; }
+.product-shell .metric-card, .product-shell .analytics-card, .product-shell .module-card { transition: transform var(--duration) var(--ease-out), box-shadow var(--duration) var(--ease-out), border-color var(--duration) ease; }
+.product-shell .metric-card:hover, .product-shell .analytics-card:hover, .product-shell .module-card:hover { transform: translateY(-2px); box-shadow: 0 24px 54px -32px rgba(28,48,46,.42); }
+.product-shell .metric-icon { border-radius: 11px; }
+.product-shell .module-table tr:hover td { background: #fbf6ee; }
+.product-shell .module-status { font-weight: 600; letter-spacing: .01em; }
+.product-shell .rail-user { min-height: 58px; }
+@media (prefers-reduced-motion: reduce) {
+  .product-shell .metric-card, .product-shell .analytics-card, .product-shell .module-card { transition: none; }
+}

@@ -132,6 +132,9 @@ def test_admin_boundary(client: TestClient, auth: dict[str, str]):
 
 
 def test_dashboard_stats_do_not_include_other_owners(client: TestClient, auth: dict[str, str]):
+    baseline = client.get("/dashboard", headers=auth)
+    assert baseline.status_code == 200
+    baseline_count = baseline.json()["stats"]["meetings"]
     admin = client.post("/auth/login", json={"username": "admin", "password": "demo123456"}).json()
     admin_auth = {"Authorization": f"Bearer {admin['token']}"}
     created = client.post(
@@ -142,9 +145,9 @@ def test_dashboard_stats_do_not_include_other_owners(client: TestClient, auth: d
     assert created.status_code == 201
     dashboard = client.get("/dashboard", headers=auth)
     assert dashboard.status_code == 200
-    # The seeded demo account owns one meeting; the admin-created meeting must not
-    # change the employee's counts or become visible in analytics.
-    assert dashboard.json()["stats"]["meetings"] == 1
+    # Demo data can grow over time; the admin-created meeting must not change the
+    # employee's counts or become visible in analytics.
+    assert dashboard.json()["stats"]["meetings"] == baseline_count
     assert all(item["id"] != created.json()["id"] for item in dashboard.json()["meetings"])
 
 

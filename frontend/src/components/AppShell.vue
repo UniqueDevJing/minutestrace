@@ -20,9 +20,9 @@ function logout() { session.clear(); router.push('/login') }
     <aside :class="['side-rail', { open: mobileOpen }]">
       <RouterLink class="brand" to="/" aria-label="MinutesTrace 首页">
         <span class="brand-mark"><i/><i/><i/><i/></span>
-        <span class="brand-copy"><strong>MinutesTrace</strong><small>Evidence workspace</small></span>
+        <span class="brand-copy"><strong>MinutesTrace</strong><small>会议证据工作台</small></span>
       </RouterLink>
-      <div class="rail-caption">主工作台</div>
+      <div class="rail-caption">工作台</div>
       <nav class="rail-nav" @click="mobileOpen = false">
         <RouterLink to="/"><Home :size="17"/>系统首页</RouterLink>
         <RouterLink to="/meeting-center/management"><MessagesSquare :size="17"/>会议管理</RouterLink>
@@ -49,7 +49,7 @@ function logout() { session.clear(); router.push('/login') }
         <RouterLink to="/organization/employees"><Users :size="17"/>员工账号管理</RouterLink>
       </nav>
       <div class="rail-spacer"/>
-      <button class="rail-support" @click="router.push('/meetings')"><HelpCircle :size="17"/><span>需要帮助？</span></button>
+      <button class="rail-support" @click="router.push('/meetings')"><HelpCircle :size="17"/><span>查看使用路径</span></button>
       <button class="rail-user" @click="logout" :title="`${session.user?.display_name || '用户'} · 退出登录`">
         <span class="avatar">{{ (session.user?.display_name || 'M').slice(0, 1) }}</span>
         <span class="rail-user-copy"><strong>{{ session.user?.display_name || '用户' }}</strong><small>{{ session.user?.role === 'admin' ? '管理员' : '成员' }}</small></span>
@@ -61,7 +61,7 @@ function logout() { session.clear(); router.push('/login') }
         <button class="mobile-menu icon-btn" @click="mobileOpen = !mobileOpen" :aria-label="mobileOpen ? '关闭菜单' : '打开菜单'">
           <X v-if="mobileOpen" :size="20"/><Menu v-else :size="20"/>
         </button>
-        <div class="breadcrumb"><span>AI协作平台</span><b>/</b><strong>{{ currentSectionTitle() }}</strong></div>
+        <div class="breadcrumb"><span>会议协作平台</span><b>/</b><strong>{{ currentSectionTitle() }}</strong></div>
         <div class="top-actions">
           <button class="search-pill" @click="router.push('/meetings')"><Search :size="16"/><span>搜索会议</span><kbd>⌘ K</kbd></button>
           <button class="button primary compact" @click="router.push('/meetings?create=1')"><Plus :size="17"/>新建会议</button>
