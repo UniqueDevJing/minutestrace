@@ -20,7 +20,7 @@ function logout() { session.clear(); router.push('/login') }
     <aside :class="['side-rail', { open: mobileOpen }]">
       <RouterLink class="brand" to="/" aria-label="MinutesTrace 首页">
         <span class="brand-mark"><i/><i/><i/><i/></span>
-        <span>MinutesTrace</span>
+        <span class="brand-copy"><strong>MinutesTrace</strong><small>Evidence workspace</small></span>
       </RouterLink>
       <div class="rail-caption">主工作台</div>
       <nav class="rail-nav" @click="mobileOpen = false">

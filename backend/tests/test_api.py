@@ -131,6 +131,23 @@ def test_admin_boundary(client: TestClient, auth: dict[str, str]):
     assert employee.status_code == 201
 
 
+def test_dashboard_stats_do_not_include_other_owners(client: TestClient, auth: dict[str, str]):
+    admin = client.post("/auth/login", json={"username": "admin", "password": "demo123456"}).json()
+    admin_auth = {"Authorization": f"Bearer {admin['token']}"}
+    created = client.post(
+        "/meetings",
+        headers=admin_auth,
+        json={"title": "管理员隔离统计", "starts_at": datetime.now(timezone.utc).isoformat(), "participants": []},
+    )
+    assert created.status_code == 201
+    dashboard = client.get("/dashboard", headers=auth)
+    assert dashboard.status_code == 200
+    # The seeded demo account owns one meeting; the admin-created meeting must not
+    # change the employee's counts or become visible in analytics.
+    assert dashboard.json()["stats"]["meetings"] == 1
+    assert all(item["id"] != created.json()["id"] for item in dashboard.json()["meetings"])
+
+
 def test_meeting_object_access_isolation(client: TestClient, auth: dict[str, str]):
     admin = client.post("/auth/login", json={"username": "admin", "password": "demo123456"}).json()
     admin_auth = {"Authorization": f"Bearer {admin['token']}"}

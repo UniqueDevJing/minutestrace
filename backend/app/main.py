@@ -8,7 +8,7 @@ import secrets
 import time
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -260,7 +260,7 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user))
     calls_query = select(AiCallLog).join(Meeting, Meeting.id == AiCallLog.meeting_id, isouter=True)
     all_ai_calls = list(db.scalars(calls_query if user.role == "admin" else calls_query.where(Meeting.owner_id == user.id)))
     ai_calls = [item for item in all_ai_calls if item.meeting_id is not None]
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     trend = []
     for offset in range(6, -1, -1):
         day = (now - timedelta(days=offset)).date()
@@ -291,12 +291,22 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user))
     recent_meetings = sum(1 for item in all_meetings if item.starts_at and item.starts_at >= recent_window)
     previous_meetings = sum(1 for item in all_meetings if item.starts_at and previous_window <= item.starts_at < recent_window)
     meeting_growth = round((recent_meetings - previous_meetings) / previous_meetings * 100) if previous_meetings else 0
+    scoped_meeting_count = select(func.count(Meeting.id))
+    scoped_open_actions = select(func.count(ActionItem.id)).where(ActionItem.status == "open")
+    scoped_segments = select(func.count(TranscriptSegment.id))
+    if user.role != "admin":
+        scoped_meeting_count = scoped_meeting_count.where(Meeting.owner_id == user.id)
+        scoped_open_actions = scoped_open_actions.join(Meeting, Meeting.id == ActionItem.meeting_id).where(Meeting.owner_id == user.id)
+        scoped_segments = scoped_segments.join(Meeting, Meeting.id == TranscriptSegment.meeting_id).where(Meeting.owner_id == user.id)
+    pending_reviews = select(func.count(AgentRun.id)).where(AgentRun.status == "waiting_human")
+    if user.role != "admin":
+        pending_reviews = pending_reviews.join(Meeting, Meeting.id == AgentRun.meeting_id).where(Meeting.owner_id == user.id)
     return {
         "stats": {
-            "meetings": db.scalar(select(func.count(Meeting.id))) or 0,
-            "pending_reviews": db.scalar(select(func.count(AgentRun.id)).where(AgentRun.status == "waiting_human")) or 0,
-            "open_actions": db.scalar(select(func.count(ActionItem.id)).where(ActionItem.status == "open")) or 0,
-            "evidence_segments": db.scalar(select(func.count(TranscriptSegment.id))) or 0,
+            "meetings": db.scalar(scoped_meeting_count) or 0,
+            "pending_reviews": db.scalar(pending_reviews) or 0,
+            "open_actions": db.scalar(scoped_open_actions) or 0,
+            "evidence_segments": db.scalar(scoped_segments) or 0,
         },
         "meetings": [meeting_dict(db, item) for item in meetings],
         "actions": [
@@ -520,7 +530,12 @@ async def upload_asset(
             kind=kind,
         )
         db.add(asset)
-        db.commit()
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            final_path.unlink(missing_ok=True)
+            raise
         db.refresh(asset)
         return asset_dict(asset)
     finally:

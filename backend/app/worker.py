@@ -12,6 +12,7 @@ from typing import Any
 
 import httpx
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .agent_graph import build_review_graph
@@ -54,7 +55,16 @@ def create_job(db: Session, kind: str, meeting_id: int, idempotency_key: str, as
         return existing
     job = Job(kind=kind, meeting_id=meeting_id, asset_id=asset_id, run_id=run_id, idempotency_key=idempotency_key)
     db.add(job)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Two requests can enqueue the same logical work concurrently. The unique
+        # key is the source of truth; return the winner instead of surfacing 500.
+        db.rollback()
+        existing = db.scalar(select(Job).where(Job.idempotency_key == idempotency_key))
+        if existing:
+            return existing
+        raise
     db.refresh(job)
     return job
 
@@ -438,6 +448,9 @@ def claim_next_job(db: Session) -> int | None:
 
 def recover_stale_jobs(db: Session) -> None:
     cutoff = utcnow() - timedelta(seconds=get_settings().worker_stale_seconds)
+    stale_run_ids = list(db.scalars(select(Job.run_id).where(
+        Job.status == "running", Job.heartbeat_at < cutoff, Job.run_id.is_not(None)
+    )))
     db.execute(
         update(Job)
         .where(Job.status == "running", Job.heartbeat_at < cutoff, Job.attempt < get_settings().job_max_attempts)
@@ -448,7 +461,8 @@ def recover_stale_jobs(db: Session) -> None:
         .where(Job.status == "running", Job.heartbeat_at < cutoff, Job.attempt >= get_settings().job_max_attempts)
         .values(status="failed", error="任务超过最大重试次数")
     )
-    db.execute(update(AgentRun).where(AgentRun.status == "running").values(status="queued"))
+    if stale_run_ids:
+        db.execute(update(AgentRun).where(AgentRun.id.in_(stale_run_ids), AgentRun.status == "running").values(status="queued"))
     db.commit()
 
 

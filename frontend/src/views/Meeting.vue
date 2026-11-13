@@ -1,18 +1,26 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { UploadCloud, FileAudio, ArrowRight, WandSparkles, FileText, RefreshCw } from '@lucide/vue'
 import { api } from '../api'
 
 const route=useRoute(); const router=useRouter(); const id=Number(route.params.id)
 const data=ref<any>(null); const busy=ref(''); const error=ref(''); const fileInput=ref<HTMLInputElement>()
+let refreshTimer:number|undefined
 async function load(){try{data.value=await api(`/meetings/${id}`)}catch(e:any){error.value=e.message}}
-async function upload(file?:File){if(!file)return;busy.value='upload';error.value='';const body=new FormData();body.append('file',file);try{await api(`/meetings/${id}/assets`,{method:'POST',body});await load()}catch(e:any){error.value=e.message}finally{busy.value=''}}
-async function transcribe(assetId?:number){busy.value='transcribe';error.value='';try{await api(`/meetings/${id}/transcription${assetId?`?asset_id=${assetId}`:''}`,{method:'POST'});await load()}catch(e:any){error.value=e.message}finally{busy.value=''}}
-async function generate(){busy.value='minutes';error.value='';try{await api(`/meetings/${id}/minutes/generate`,{method:'POST'});await load()}catch(e:any){error.value=e.message}finally{busy.value=''}}
+function scheduleRefresh(){
+  window.clearTimeout(refreshTimer)
+  if(data.value?.active_job && ['queued','running'].includes(data.value.active_job.status)){
+    refreshTimer=window.setTimeout(async()=>{await load();scheduleRefresh()},2500)
+  }
+}
+async function upload(file?:File){if(!file)return;busy.value='upload';error.value='';const body=new FormData();body.append('file',file);try{await api(`/meetings/${id}/assets`,{method:'POST',body});await load();scheduleRefresh()}catch(e:any){error.value=e.message}finally{busy.value=''}}
+async function transcribe(assetId?:number){busy.value='transcribe';error.value='';try{await api(`/meetings/${id}/transcription${assetId?`?asset_id=${assetId}`:''}`,{method:'POST'});await load();scheduleRefresh()}catch(e:any){error.value=e.message}finally{busy.value=''}}
+async function generate(){busy.value='minutes';error.value='';try{await api(`/meetings/${id}/minutes/generate`,{method:'POST'});await load();scheduleRefresh()}catch(e:any){error.value=e.message}finally{busy.value=''}}
 const size=(n:number)=>n>1048576?`${(n/1048576).toFixed(1)} MB`:`${Math.ceil(n/1024)} KB`
 const jobStatus=(v:string)=>({queued:'队列中',running:'处理中',succeeded:'已完成',failed:'失败'} as any)[v]||v
-onMounted(load)
+onMounted(async()=>{await load();scheduleRefresh()})
+onUnmounted(()=>window.clearTimeout(refreshTimer))
 </script>
 
 <template>
