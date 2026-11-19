@@ -20,28 +20,28 @@ function logout() { session.clear(); router.push('/login') }
     <aside :class="['side-rail', { open: mobileOpen }]">
       <RouterLink class="brand" to="/" aria-label="MinutesTrace 首页">
         <span class="brand-mark"><i/><i/><i/><i/></span>
-        <span class="brand-copy"><strong>MinutesTrace</strong><small>会议证据工作台</small></span>
+        <span class="brand-copy"><strong>MinutesTrace</strong><small>会议记录工作台</small></span>
       </RouterLink>
       <div class="rail-caption">工作台</div>
       <nav class="rail-nav" @click="mobileOpen = false">
         <RouterLink to="/"><Home :size="17"/>系统首页</RouterLink>
         <RouterLink to="/meeting-center/management"><MessagesSquare :size="17"/>会议管理</RouterLink>
       </nav>
-      <div class="rail-caption">会议中心</div>
+      <div class="rail-caption">会议记录</div>
       <nav class="rail-nav" @click="mobileOpen = false">
         <RouterLink to="/meeting-center/materials"><FileText :size="17"/>会议资料</RouterLink>
         <RouterLink to="/meeting-center/transcription"><FileAudio :size="17"/>转写任务</RouterLink>
-        <RouterLink to="/meeting-center/minutes"><ClipboardCheck :size="17"/>AI会议纪要</RouterLink>
+        <RouterLink to="/meeting-center/minutes"><ClipboardCheck :size="17"/>正式纪要</RouterLink>
       </nav>
-      <div class="rail-caption">智能助手</div>
+      <div class="rail-caption">复核与运行</div>
       <nav class="rail-nav" @click="mobileOpen = false">
         <RouterLink to="/assistant/review"><Bot :size="17"/>纪要自检</RouterLink>
         <RouterLink to="/assistant/observability"><Activity :size="17"/>运行观测</RouterLink>
       </nav>
-      <div class="rail-caption">系统配置</div>
+      <div class="rail-caption">工作区设置</div>
       <nav class="rail-nav" @click="mobileOpen = false">
-        <RouterLink to="/system/models"><Settings2 :size="17"/>AI模型配置</RouterLink>
-        <RouterLink to="/system/prompts"><SlidersHorizontal :size="17"/>Prompt模板</RouterLink>
+        <RouterLink to="/system/models"><Settings2 :size="17"/>模型设置</RouterLink>
+        <RouterLink to="/system/prompts"><SlidersHorizontal :size="17"/>提示模板</RouterLink>
       </nav>
       <div v-if="session.user?.role === 'admin'" class="rail-caption">组织与员工</div>
       <nav v-if="session.user?.role === 'admin'" class="rail-nav" @click="mobileOpen = false">
@@ -69,7 +69,7 @@ function logout() { session.clear(); router.push('/login') }
       </header>
       <main class="page-wrap"><slot/></main>
       <footer class="app-footer">
-        <span>MinutesTrace <i/> 证据先于结论</span><span>Agent 修订由人确认</span>
+        <span>MinutesTrace <i/> 会议记录留在团队里</span><span>修订由人确认后生效</span>
       </footer>
     </div>
   </div>

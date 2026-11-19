@@ -101,6 +101,12 @@ npm run dev
 
 生产入口为 `/minutestrace/`，API 前缀为 `/minutestrace/api/`。部署时必须同时运行 API、Worker 和 Nginx，具体文件见 [`deploy/`](deploy/)。
 
+## GitHub 自动部署
+
+`.github/workflows/deploy-production.yml` 会在 `main` 分支推送后执行后端测试、前端构建，并通过 SSH 发布到 `/opt/minutestrace`。发布前保留当前 `current` 与 `web` 软链接，安装脚本或健康检查失败时恢复上一版本。
+
+仓库的 `production` Environment 需要配置 `PROD_HOST`、`PROD_PORT`、`PROD_USER`、`PROD_SSH_PRIVATE_KEY`、`PROD_KNOWN_HOSTS` 和 `PROD_APP_DIR`。生产服务健康检查为 `http://127.0.0.1:18119/health`，外部入口为 `/minutestrace/api/health`。
+
 ## 验证命令
 
 ```powershell

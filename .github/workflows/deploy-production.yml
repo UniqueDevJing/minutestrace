@@ -1,0 +1,143 @@
+name: MinutesTrace production deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minutestrace-production
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Test and package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Backend tests
+        run: |
+          python -m pip install --disable-pip-version-check -r backend/requirements.txt
+          PYTHONPATH=backend pytest backend/tests -q
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Frontend build
+        working-directory: frontend
+        run: npm ci && npm run build
+
+      - name: Assemble release
+        run: |
+          set -euo pipefail
+          tar --exclude='.git' --exclude='frontend/node_modules' --exclude='frontend/dist' \
+            --exclude='frontend/test-results' --exclude='frontend/playwright-report' \
+            -czf minutestrace-source.tgz backend deploy openapi.yaml README.md
+          tar -czf minutestrace-web.tgz -C frontend/dist .
+          test -s minutestrace-source.tgz
+          test -s minutestrace-web.tgz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minutestrace-release-${{ github.sha }}
+          path: |
+            minutestrace-source.tgz
+            minutestrace-web.tgz
+            deploy/install-server.sh
+          if-no-files-found: error
+          retention-days: 14
+
+  deploy:
+    name: Deploy to production server
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: minutestrace-release-${{ github.sha }}
+
+      - name: Configure SSH
+        shell: bash
+        env:
+          PROD_KNOWN_HOSTS: ${{ secrets.PROD_KNOWN_HOSTS }}
+          PROD_SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$PROD_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          printf '%s\n' "$PROD_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+
+      - name: Upload release
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PORT: ${{ secrets.PROD_PORT }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          scp -P "${PROD_PORT:-22}" minutestrace-source.tgz \
+            "${PROD_USER}@${PROD_HOST}:/tmp/minutestrace-source-${SHA}.tar.gz"
+          scp -P "${PROD_PORT:-22}" minutestrace-web.tgz \
+            "${PROD_USER}@${PROD_HOST}:/tmp/minutestrace-web-${SHA}.tar.gz"
+          scp -P "${PROD_PORT:-22}" deploy/install-server.sh \
+            "${PROD_USER}@${PROD_HOST}:/tmp/install-server-${SHA}.sh"
+
+      - name: Activate release and verify
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_PORT: ${{ secrets.PROD_PORT }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          PROD_APP_DIR: ${{ secrets.PROD_APP_DIR }}
+          SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -p "${PROD_PORT:-22}" "${PROD_USER}@${PROD_HOST}" \
+            "APP_DIR='${PROD_APP_DIR:-/opt/minutestrace}' RELEASE='${SHA}' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+
+          source_archive="/tmp/minutestrace-source-${RELEASE}.tar.gz"
+          web_archive="/tmp/minutestrace-web-${RELEASE}.tar.gz"
+          installer="/tmp/install-server-${RELEASE}.sh"
+          previous_current="$(readlink -f "$APP_DIR/current" 2>/dev/null || true)"
+          previous_web="$(readlink -f "$APP_DIR/web" 2>/dev/null || true)"
+
+          rollback() {
+            set +e
+            if [ -n "$previous_current" ]; then ln -sfn "$previous_current" "$APP_DIR/current"; fi
+            if [ -n "$previous_web" ]; then ln -sfn "$previous_web" "$APP_DIR/web"; fi
+            systemctl restart minutestrace-api.service minutestrace-worker.service
+            nginx -t && systemctl reload nginx
+            rm -f "$source_archive" "$web_archive" "$installer"
+            exit 1
+          }
+          trap rollback ERR
+
+          test -s "$source_archive"
+          test -s "$web_archive"
+          test -s "$installer"
+          install -d -m 0755 "$APP_DIR"
+          install -m 0700 "$installer" "$APP_DIR/install-server-${RELEASE}.sh"
+          bash "$APP_DIR/install-server-${RELEASE}.sh" "$RELEASE"
+          systemctl is-active --quiet minutestrace-api.service
+          systemctl is-active --quiet minutestrace-worker.service
+          curl --fail --silent --show-error --max-time 10 http://127.0.0.1:18119/health
+          curl --fail --silent --show-error --max-time 10 http://127.0.0.1:18119/health >/dev/null
+          rm -f "$source_archive" "$web_archive" "$installer" "$APP_DIR/install-server-${RELEASE}.sh"
+          trap - ERR
+          REMOTE
