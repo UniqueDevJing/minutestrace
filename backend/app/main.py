@@ -253,8 +253,9 @@ def me(user: User = Depends(current_user)) -> dict[str, Any]:
 def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user)) -> dict[str, Any]:
     all_meetings = list(db.scalars(visible_meetings(select(Meeting).order_by(Meeting.starts_at.desc()), user)))
     meetings = all_meetings[:6]
-    action_query = select(ActionItem).join(Meeting, Meeting.id == ActionItem.meeting_id).where(ActionItem.status == "open").order_by(ActionItem.created_at.desc()).limit(8)
-    action_items = list(db.scalars(action_query if user.role == "admin" else action_query.where(Meeting.owner_id == user.id)))
+    action_query = select(ActionItem).join(Meeting, Meeting.id == ActionItem.meeting_id).where(ActionItem.status == "open").order_by(ActionItem.created_at.desc())
+    scoped_action_items = list(db.scalars(action_query if user.role == "admin" else action_query.where(Meeting.owner_id == user.id)))
+    action_items = scoped_action_items[:8]
     minutes_query = select(MinutesVersion).join(Meeting, Meeting.id == MinutesVersion.meeting_id)
     all_minutes = list(db.scalars(minutes_query if user.role == "admin" else minutes_query.where(Meeting.owner_id == user.id)))
     calls_query = select(AiCallLog).join(Meeting, Meeting.id == AiCallLog.meeting_id, isouter=True)
@@ -291,6 +292,12 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user))
     recent_meetings = sum(1 for item in all_meetings if item.starts_at and item.starts_at >= recent_window)
     previous_meetings = sum(1 for item in all_meetings if item.starts_at and previous_window <= item.starts_at < recent_window)
     meeting_growth = round((recent_meetings - previous_meetings) / previous_meetings * 100) if previous_meetings else 0
+    linked_actions = sum(1 for item in scoped_action_items if json_loads(item.evidence_json, []))
+    missing_owner = sum(1 for item in scoped_action_items if not item.owner_name.strip() or item.owner_name.strip() in {"待确认", "未分配"})
+    missing_due = sum(1 for item in scoped_action_items if not item.due_text.strip() or item.due_text.strip() in {"待确认", "未确认"})
+    pending_review_count = sum(1 for item in all_minutes if item.status == "waiting_human")
+    action_total = len(scoped_action_items)
+    evidence_coverage = round(linked_actions / action_total * 100) if action_total else 100
     scoped_meeting_count = select(func.count(Meeting.id))
     scoped_open_actions = select(func.count(ActionItem.id)).where(ActionItem.status == "open")
     scoped_segments = select(func.count(TranscriptSegment.id))
@@ -320,6 +327,14 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user))
             "review_total": len(all_minutes),
             "minutes_completion_rate": completion_rate,
             "meeting_growth": meeting_growth,
+            "traceability": {
+                "evidence_coverage": evidence_coverage,
+                "action_items": action_total,
+                "linked_actions": linked_actions,
+                "missing_owner": missing_owner,
+                "missing_due": missing_due,
+                "pending_review": pending_review_count,
+            },
             "ai": {
                 "calls": len(ai_calls),
                 "success_rate": round(successful_calls / len(ai_calls) * 100) if ai_calls else 100,

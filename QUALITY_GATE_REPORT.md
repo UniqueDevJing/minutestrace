@@ -36,3 +36,22 @@
 3. 运行两个 Worker 实例验证同一幂等键只产生一个 Job，并验证 stale recovery 不误改其他运行。
 4. 实测 512 MB 边界、错误 MIME、断点重连、导出中文字体和对象级越权。
 5. 若部署多副本，先完成 Redis/数据库 SSE ticket 共享，再开放横向扩容。
+
+## 本轮创新改造与第二轮质检（2026-11-21）
+
+### 产品改造
+
+首页新增“证据兑现状态”面板，把会议记录真正落到执行层：证据覆盖率、可回溯行动项、负责人缺口、截止时间缺口和待人工确认版本均由 `/dashboard` 按当前用户权限实时计算。面板提供直达正式纪要处理入口，避免只展示“AI 已生成”的空泛指标。
+
+### 验证证据
+
+- 后端 `PYTHONPATH=backend python -m pytest backend/tests -q`：7 项通过，保留 1 条 LangGraph 弃用提示。
+- 前端 `npm run build`：通过，`vue-tsc` 与 Vite 构建均通过。
+- 浏览器质检：本地登录、首页 API 数据渲染、桌面端截图和 390px 手机端截图均通过；未发现横向溢出，新面板在移动端折叠为单列。
+- 对抗式校准：临时移除 dashboard 的 `visible_meetings` 所有者过滤后，`test_dashboard_stats_do_not_include_other_owners` 按预期失败；恢复过滤后，原测试重新通过。
+
+### 仍需上线前确认
+
+- 真实服务器的 MySQL、Nginx、systemd、百炼 Key 与上传 512 MB 边界尚未在本地替代环境中证明，部署后仍需读取服务健康检查证据。
+- SSE ticket 仍为单进程内存结构，多副本前必须迁移到 Redis 或数据库。
+- `MinutesVersion(meeting_id, version)` 的生产唯一约束仍需配套迁移脚本。

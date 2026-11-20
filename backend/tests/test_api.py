@@ -134,7 +134,12 @@ def test_admin_boundary(client: TestClient, auth: dict[str, str]):
 def test_dashboard_stats_do_not_include_other_owners(client: TestClient, auth: dict[str, str]):
     baseline = client.get("/dashboard", headers=auth)
     assert baseline.status_code == 200
-    baseline_count = baseline.json()["stats"]["meetings"]
+    baseline_payload = baseline.json()
+    baseline_count = baseline_payload["stats"]["meetings"]
+    traceability = baseline_payload["analytics"]["traceability"]
+    assert 0 <= traceability["evidence_coverage"] <= 100
+    assert traceability["action_items"] >= traceability["linked_actions"]
+    assert {"missing_owner", "missing_due", "pending_review"} <= traceability.keys()
     admin = client.post("/auth/login", json={"username": "admin", "password": "demo123456"}).json()
     admin_auth = {"Authorization": f"Bearer {admin['token']}"}
     created = client.post(

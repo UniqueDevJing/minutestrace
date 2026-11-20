@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowUpRight, Plus, CheckCircle2, Clock3, CalendarDays, Filter, Sparkles, FileCheck2 } from '@lucide/vue'
+import { ArrowUpRight, Plus, CheckCircle2, Clock3, CalendarDays, Filter, Sparkles, FileCheck2, Link2, UserRound, CalendarClock, ShieldCheck } from '@lucide/vue'
 import { api, session } from '../api'
 
 const router = useRouter()
@@ -13,6 +13,8 @@ onMounted(async () => { try { data.value = await api('/dashboard') } catch (e: a
 const fmt = (value: string) => new Date(value).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
 const statusText = (value: string) => ({ ended: '已完成', draft: '草稿', scheduled: '待开始', live: '进行中', archived: '已归档' } as any)[value] || value
 const analytics = computed(() => data.value?.analytics || { meeting_trend: [], meeting_status: [], review_status: [], ai: {} })
+const traceability = computed(() => analytics.value.traceability || { evidence_coverage: 100, action_items: 0, linked_actions: 0, missing_owner: 0, missing_due: 0, pending_review: 0 })
+const coverageStyle = computed(() => ({ background: `conic-gradient(var(--coral) ${traceability.value.evidence_coverage}%, #e8e2d8 0)` }))
 const trend = computed(() => analytics.value.meeting_trend || [])
 const maxTrend = computed(() => Math.max(1, ...trend.value.map((item: any) => item.value)))
 const trendPoints = computed(() => trend.value.map((item: any, index: number) => { const x = trend.value.length <= 1 ? 0 : (index / (trend.value.length - 1)) * 100; const y = 88 - (item.value / maxTrend.value) * 68; return `${x},${y}` }).join(' '))
@@ -34,6 +36,24 @@ const reviewColors = ['#35b77a', '#f2b441', '#ec6a5d']
       <article class="metric-card metric-green"><div class="metric-icon"><CheckCircle2 :size="17"/></div><div><span>纪要完成率</span><strong>{{ analytics.minutes_completion_rate || 100 }}<em>%</em></strong><small>已生成结构化纪要</small></div><b>稳定</b></article>
       <article class="metric-card metric-orange"><div class="metric-icon"><Sparkles :size="17"/></div><div><span>待确认纪要</span><strong>{{ analytics.review_total || 0 }}</strong><small>等待人工确认的版本</small></div><b>需要确认</b></article>
       <article class="metric-card metric-purple"><div class="metric-icon"><Clock3 :size="17"/></div><div><span>待跟进行动</span><strong>{{ data.actions.length }}</strong><small>尚未完成的行动项</small></div><b>需要跟进</b></article>
+    </section>
+    <section class="traceability-panel">
+      <div class="traceability-lead">
+        <div class="kicker">Evidence pulse / 兑现状态</div>
+        <h2>让会议结论进入下一步，而不是停在纪要里。</h2>
+        <p>系统只统计已保存、可回到原始转写的行动项。缺负责人、缺截止时间或未完成人工确认的内容，会在这里留下明确的下一步。</p>
+        <button class="button primary" @click="router.push('/meeting-center/minutes')">处理待确认内容 <ArrowUpRight :size="15"/></button>
+      </div>
+      <div class="traceability-score" aria-label="行动项证据覆盖率">
+        <div class="coverage-ring" :style="coverageStyle"><div><strong>{{ traceability.evidence_coverage }}<em>%</em></strong><span>证据覆盖</span></div></div>
+        <div class="coverage-caption"><ShieldCheck :size="16"/><span>{{ traceability.linked_actions }} / {{ traceability.action_items }} 条行动项可回溯</span></div>
+      </div>
+      <div class="traceability-checks">
+        <div class="trace-check"><span class="trace-check-icon"><Link2 :size="15"/></span><div><strong>证据链</strong><small>已绑定原始片段</small></div><b>{{ traceability.linked_actions }}</b></div>
+        <div class="trace-check"><span class="trace-check-icon warning"><UserRound :size="15"/></span><div><strong>负责人缺口</strong><small>需要人工补齐</small></div><b>{{ traceability.missing_owner }}</b></div>
+        <div class="trace-check"><span class="trace-check-icon warning"><CalendarClock :size="15"/></span><div><strong>时间缺口</strong><small>需要补充截止时间</small></div><b>{{ traceability.missing_due }}</b></div>
+        <div class="trace-check"><span class="trace-check-icon review"><FileCheck2 :size="15"/></span><div><strong>人工确认</strong><small>修订稿尚未生效</small></div><b>{{ traceability.pending_review }}</b></div>
+      </div>
     </section>
     <section class="analytics-grid">
       <article class="analytics-card trend-card"><header class="analytics-card-header"><div><span class="kicker">Meeting rhythm</span><h2>会议节奏</h2></div><span class="chart-legend"><i class="legend-line"/>会议数量</span></header><div class="line-chart" aria-label="近七日会议趋势折线图"><div class="chart-y"><span>{{ maxTrend }}</span><span>{{ Math.ceil(Number(maxTrend) / 2) }}</span><span>0</span></div><svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img"><defs><linearGradient id="trendFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#3568f5" stop-opacity=".24"/><stop offset="1" stop-color="#3568f5" stop-opacity="0"/></linearGradient></defs><path v-if="trendArea" :d="`M ${trendArea.replaceAll(' ', ' L ')}`" fill="url(#trendFill)"/><polyline v-if="trendPoints" :points="trendPoints" fill="none" stroke="#3568f5" stroke-width="1.8" vector-effect="non-scaling-stroke"/><circle v-for="(item, index) in trend" :key="item.label" :cx="trend.length <= 1 ? 0 : (Number(index) / (trend.length - 1)) * 100" :cy="88 - (Number(item.value) / Number(maxTrend)) * 68" r="1.8" fill="#fff" stroke="#3568f5" stroke-width="1.4" vector-effect="non-scaling-stroke"/></svg><div class="chart-x"><span v-for="item in trend" :key="item.label">{{ item.label }}</span></div></div></article>
