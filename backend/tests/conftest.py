@@ -1,8 +1,10 @@
 import os
+import sys
 from pathlib import Path
 
 TEST_ROOT = Path(__file__).resolve().parent / ".runtime"
 TEST_ROOT.mkdir(parents=True, exist_ok=True)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ["MINUTESTRACE_DATABASE_URL"] = f"sqlite:///{(TEST_ROOT / 'test.db').as_posix()}"
 os.environ["MINUTESTRACE_STORAGE_DIR"] = str(TEST_ROOT / "uploads")
 os.environ["MINUTESTRACE_JWT_SECRET"] = "test-secret-with-enough-entropy"

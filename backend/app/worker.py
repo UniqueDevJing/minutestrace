@@ -72,22 +72,29 @@ def create_job(db: Session, kind: str, meeting_id: int, idempotency_key: str, as
 def parse_text_transcript(path: Path) -> list[dict[str, Any]]:
     lines = [line.strip() for line in path.read_text(encoding="utf-8", errors="ignore").splitlines() if line.strip()]
     segments = []
-    for index, line in enumerate(lines):
+    for line in lines:
         matched = re.match(r"(?:\[(\d{1,2}):(\d{2})(?::(\d{2}))?\]\s*)?(?:([^：:]{1,24})[：:])?\s*(.+)", line)
         if not matched:
             continue
         hours_or_minutes, minutes_or_seconds, seconds, speaker, text = matched.groups()
+        # A plain line can be a title, header, or unrelated note. It is not
+        # transcript evidence unless it has a timestamp or an explicit speaker
+        # delimiter. Keep this fail-closed so downstream minutes never cite
+        # unstructured text as if it came from a person speaking.
+        if hours_or_minutes is None and speaker is None:
+            continue
+        segment_index = len(segments)
         if seconds is None:
             start_ms = ((int(hours_or_minutes or 0) * 60) + int(minutes_or_seconds or 0)) * 1000
         else:
             start_ms = ((int(hours_or_minutes or 0) * 3600) + int(minutes_or_seconds or 0) * 60 + int(seconds)) * 1000
-        if start_ms == 0 and index:
-            start_ms = index * 15000
+        if start_ms == 0 and segment_index:
+            start_ms = segment_index * 15000
         segments.append(
             {
                 "start_ms": start_ms,
                 "end_ms": start_ms + 15000,
-                "speaker_label": f"speaker-{index % 3}",
+                "speaker_label": f"speaker-{segment_index % 3}",
                 "speaker_name": speaker,
                 "text": text,
             }

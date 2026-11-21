@@ -40,6 +40,12 @@ jobs:
         working-directory: frontend
         run: npm ci && npm run build
 
+      - name: Frontend browser regression
+        working-directory: frontend
+        run: |
+          npx playwright install --with-deps chromium
+          npm run test:e2e
+
       - name: Assemble release
         run: |
           set -euo pipefail
